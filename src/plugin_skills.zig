@@ -11,7 +11,7 @@ pub const skills: []const plugin_api.SkillSection = &.{
             "cpp build [file] [--out file.sa]: emit SA text.",
             "cpp build-exe [file] [-o exe]: emit SA then delegate to host `sa build-exe`.",
             "cpp test [file]: emit SA then delegate to host `sa test`.",
-            "Subset: free functions, if/while/do/for/switch, return/break/continue, struct/class POD + methods, fixed arrays, cout<< for ints/strings, namespaces; no templates/inheritance/exceptions/lambdas/vector/string yet.",
+            "Subset: free functions + overloading (best match by arity/types; ambiguity is an error), if/while/do/for/switch, return/break/continue, struct/class POD + methods, fixed arrays, cout<< for ints/strings, namespaces; no templates/inheritance/exceptions/lambdas/vector/string yet.",
             "Compile-time leak check: every `new` must be freed on all paths (path-sensitive, alias-aware); failures point at C++ source lines. See docs/leakcheck_cn.md.",
         },
     },

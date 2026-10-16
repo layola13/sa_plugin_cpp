@@ -91,8 +91,14 @@ const Layout = struct {
 
 const FuncRef = struct {
     full: []const u8,
+    /// SA-level symbol. Equals `full` for unique names; for overload sets it
+    /// is `full` + "__" + per-parameter kind tokens, so every overload gets
+    /// a distinct SA function without renaming single (non-overloaded)
+    /// functions and breaking existing output.
+    mangled: []const u8 = "",
     ret_kind: VKind,
     ret_sid: ?usize,
+    ret_elem_kind: VKind = .i32,
     params: []RType,
     is_method: bool,
     is_static: bool,
@@ -112,6 +118,44 @@ fn primSize(kind: VKind) usize {
     };
 }
 
+/// Exact parameter-signature equality (overload duplicate detection).
+fn sameSig(a: []RType, b: []RType) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        if (x.kind != y.kind or x.sid != y.sid or
+            x.elem_kind != y.elem_kind or x.elem_sid != y.elem_sid) return false;
+    }
+    return true;
+}
+
+/// Conversion cost from an argument to a parameter type, mirroring what
+/// `Codegen.conv` can actually emit. Null means no implicit conversion
+/// exists, so the candidate is not viable for these arguments.
+fn convCost(fk: VKind, fsid: ?usize, felem: VKind, tk: VKind, tsid: ?usize, telem: VKind) ?u8 {
+    if (tk == .ptr and tsid != null) {
+        // Struct-typed parameter: only the same struct fits. A dynamic
+        // value (e.g. a call result, whose struct is unknown) is assumed
+        // to fit but ranks below an exact match.
+        if (fk != .ptr and fk != .slice) return null;
+        if (fsid != null) return if (fsid.? == tsid.?) @as(?u8, 0) else null;
+        return if (fk == .ptr) @as(?u8, 1) else @as(?u8, 2);
+    }
+    if (fk == tk) {
+        // Same representation: pointees still discriminate (int* beats
+        // long* for an int array) while everything else is exact.
+        if (fk == .ptr and tsid == null and fsid == null and felem != telem) return 1;
+        return 0;
+    }
+    // Fat and thin pointers share one representation.
+    if ((fk == .slice or fk == .ptr) and (tk == .slice or tk == .ptr)) return 1;
+    if (tk == .boolean and fk.isScalar()) return 3;
+    if (fk == .boolean and tk.isInt()) return 1;
+    if (fk.isInt() and tk.isInt()) return 1;
+    if (fk.isInt() and tk == .f64) return 2;
+    if (fk == .f64 and tk.isInt()) return 3;
+    return null;
+}
+
 // ---------------------------------------------------------------------------
 // Codegen
 // ---------------------------------------------------------------------------
@@ -125,6 +169,10 @@ pub const Codegen = struct {
     lbl_n: usize = 0,
     layouts: std.array_list.Managed(Layout),
     funcrefs: std.array_list.Managed(FuncRef),
+    /// funcref index per `p.funcs` entry (null for dtors, which are skipped).
+    /// Lets genFunc find the exact FuncRef of the definition it emits even
+    /// when several overloads share one name.
+    fref_of_func: std.array_list.Managed(?usize),
     str_consts: std.array_list.Managed(StrConst),
     need_print: bool = false,
     need_fmt: bool = false,
@@ -149,6 +197,7 @@ pub const Codegen = struct {
             .out = out,
             .layouts = .init(gpa),
             .funcrefs = .init(gpa),
+            .fref_of_func = .init(gpa),
             .str_consts = .init(gpa),
             .bindings = .init(gpa),
             .temps = .init(gpa),
@@ -159,6 +208,7 @@ pub const Codegen = struct {
     pub fn deinit(self: *Codegen) void {
         self.layouts.deinit();
         self.funcrefs.deinit();
+        self.fref_of_func.deinit();
         self.str_consts.deinit();
         self.bindings.deinit();
         self.temps.deinit();
@@ -310,11 +360,23 @@ pub const Codegen = struct {
 
     fn indexFuncs(self: *Codegen) CompileError!void {
         for (self.p.funcs.items) |*f| {
-            if (f.is_dtor) continue;
+            if (f.is_dtor) {
+                try self.fref_of_func.append(null);
+                continue;
+            }
             const full = try std.fmt.allocPrint(self.gpa, "{s}{s}", .{ f.qual, f.name });
-            for (self.funcrefs.items) |r| {
-                if (std.mem.eql(u8, r.full, full)) {
-                    return self.err(f.off, "duplicate function '{s}'", .{full});
+            // Constructors and `main` cannot be overloaded in v0.1 (ctors
+            // take no parameters at all; see the parser), so a second
+            // definition keeps the historical duplicate error. Plain
+            // functions and methods may share one name; exact-signature
+            // duplicates stay errors (checked once params resolve below).
+            const single_def = f.is_ctor or
+                (std.mem.eql(u8, f.name, "main") and f.qual.len == 0 and !f.is_method);
+            if (single_def) {
+                for (self.funcrefs.items) |r| {
+                    if (std.mem.eql(u8, r.full, full)) {
+                        return self.err(f.off, "duplicate function '{s}'", .{full});
+                    }
                 }
             }
             var params: std.array_list.Managed(RType) = .init(self.gpa);
@@ -322,11 +384,20 @@ pub const Codegen = struct {
             for (f.params) |pm| {
                 try params.append(try self.resolveType(pm.ty, f.off));
             }
+            // Exact-signature duplicates are ODR violations with or without
+            // overloading (C++ rejects them too).
+            for (self.funcrefs.items) |r| {
+                if (std.mem.eql(u8, r.full, full) and sameSig(r.params, params.items)) {
+                    return self.err(f.off, "duplicate function '{s}'", .{full});
+                }
+            }
             var ret_sid: ?usize = null;
+            var ret_elem_kind: VKind = .i32;
             const ret_kind: VKind = blk: {
                 if (f.ret.isVoid()) break :blk .none;
                 const rt = try self.resolveType(f.ret, f.off);
                 ret_sid = rt.sid;
+                ret_elem_kind = rt.elem_kind;
                 break :blk rt.kind;
             };
             var sid: ?usize = null;
@@ -349,12 +420,182 @@ pub const Codegen = struct {
                 .full = full,
                 .ret_kind = ret_kind,
                 .ret_sid = ret_sid,
+                .ret_elem_kind = ret_elem_kind,
                 .params = try params.toOwnedSlice(),
                 .is_method = f.is_method,
                 .is_static = f.is_static,
                 .sid = sid,
             });
+            try self.fref_of_func.append(self.funcrefs.items.len - 1);
         }
+        // Second pass: assign SA-level names. Unique names keep their bare
+        // spelling (existing output stays byte-identical); overload sets get
+        // a per-parameter kind-token suffix so each overload owns one symbol.
+        // (Same-full + same-mangled is impossible here: the exact-signature
+        // check above guarantees the tokens differ whenever the names do.)
+        for (self.funcrefs.items) |*r| {
+            var n: usize = 0;
+            for (self.funcrefs.items) |o| {
+                if (std.mem.eql(u8, o.full, r.full)) n += 1;
+            }
+            r.mangled = if (n > 1) try self.mangledName(r) else r.full;
+        }
+    }
+
+    /// One stable mangling token per parameter type.
+    fn sigToken(self: *Codegen, rt: RType) CompileError![]const u8 {
+        if (rt.kind == .ptr and rt.sid != null) {
+            const s = self.p.structs.items[rt.sid.?];
+            return std.fmt.allocPrint(self.gpa, "ptr_{s}{s}", .{ s.qual, s.name });
+        }
+        if (rt.kind == .ptr) {
+            return std.fmt.allocPrint(self.gpa, "ptr_{s}", .{@tagName(rt.elem_kind)});
+        }
+        return @tagName(rt.kind);
+    }
+
+    fn mangledName(self: *Codegen, r: *const FuncRef) CompileError![]const u8 {
+        var aw: std.Io.Writer.Allocating = .init(self.gpa);
+        defer aw.deinit();
+        const w: *std.Io.Writer = &aw.writer;
+        (w.writeAll(r.full)) catch return error.CodegenError;
+        (w.writeAll("__")) catch return error.CodegenError;
+        for (r.params, 0..) |pm, i| {
+            if (i != 0) (w.writeAll("_")) catch return error.CodegenError;
+            const tok = try self.sigToken(pm);
+            (w.writeAll(tok)) catch return error.CodegenError;
+            if (!std.mem.eql(u8, tok, @tagName(pm.kind))) self.gpa.free(tok);
+        }
+        return self.gpa.dupe(u8, aw.written()) catch return error.CodegenError;
+    }
+
+    fn collectCands(self: *Codegen, cname: []const u8, out: *std.array_list.Managed(*FuncRef)) CompileError!void {
+        for (self.funcrefs.items) |*r| {
+            if (std.mem.eql(u8, r.full, cname)) try out.append(r);
+        }
+        // Try current qualifier prefix (same fallback as findFunc).
+        if (self.cur_qual.len != 0) {
+            const q = try std.fmt.allocPrint(self.gpa, "{s}{s}", .{ self.cur_qual, cname });
+            defer self.gpa.free(q);
+            for (self.funcrefs.items) |*r| {
+                if (std.mem.eql(u8, r.full, q)) {
+                    var dup = false;
+                    for (out.items) |o| {
+                        if (o == r) {
+                            dup = true;
+                            break;
+                        }
+                    }
+                    if (!dup) try out.append(r);
+                }
+            }
+        }
+    }
+
+    /// Static kind (+ struct/pointee identity when known) of a call argument.
+    fn argKindSid(self: *Codegen, e: par.Eid) CompileError!struct { kind: VKind, sid: ?usize, elem: VKind } {
+        const ex = self.p.exprs.items[e];
+        switch (ex.kind) {
+            .ident => |n| {
+                const b = self.lookup(n) orelse {
+                    return self.err(ex.off, "unknown variable '{s}'", .{n});
+                };
+                return .{ .kind = b.kind, .sid = b.sid, .elem = b.elem_kind };
+            },
+            .this_ => {
+                _ = self.lookup("this") orelse {
+                    return self.err(ex.off, "'this' outside a method", .{});
+                };
+                return .{ .kind = .ptr, .sid = self.cur_sid, .elem = .i32 };
+            },
+            .call => |c| {
+                const ce = self.p.exprs.items[c.callee];
+                if (ce.kind != .ident) {
+                    return self.err(ce.off, "indirect calls are not supported in v0.1", .{});
+                }
+                const nm = try self.normalizeCallName(ce.kind.ident);
+                defer if (nm.ptr != ce.kind.ident.ptr) self.gpa.free(nm);
+                const ref = try self.resolveCall(nm, ce.kind.ident, c.args, ce.off, null);
+                return .{ .kind = ref.ret_kind, .sid = ref.ret_sid, .elem = ref.ret_elem_kind };
+            },
+            .method_call => |m| {
+                const ref = try self.methodFuncRef(m.obj, m.name, m.args, ex.off);
+                return .{ .kind = ref.ret_kind, .sid = ref.ret_sid, .elem = ref.ret_elem_kind };
+            },
+            else => return .{ .kind = try self.typeofExpr(e), .sid = null, .elem = .i32 },
+        }
+    }
+
+    /// Resolve a call to one FuncRef.
+    ///
+    /// `cname` is the normalized (`::` -> `_`) callee, `src` the source
+    /// spelling for diagnostics, `meth` the short method name when the call
+    /// goes through an object (which changes only the single-candidate
+    /// arity message; overload diagnostics are identical either way).
+    ///
+    /// With a single candidate this behaves exactly like the historical
+    /// lookup (same errors, same messages); with several it ranks by arity
+    /// then conversion cost and reports no-match/ambiguity explicitly.
+    fn resolveCall(self: *Codegen, cname: []const u8, src: []const u8, args: []par.Eid, off: usize, meth: ?[]const u8) CompileError!*FuncRef {
+        var cands: std.array_list.Managed(*FuncRef) = .init(self.gpa);
+        defer cands.deinit();
+        try self.collectCands(cname, &cands);
+        if (cands.items.len == 0) {
+            return self.err(off, "unknown function '{s}'", .{src});
+        }
+        if (cands.items.len == 1) {
+            const ref = cands.items[0];
+            if (meth == null and ref.is_method and !ref.is_static) {
+                return self.err(off, "method '{s}' needs an object (write obj.{s}(...))", .{ cname, src });
+            }
+            if (args.len != ref.params.len) {
+                if (meth) |m| {
+                    return self.err(off, "method '{s}' takes {d} arguments, got {d}", .{ m, ref.params.len, args.len });
+                }
+                return self.err(off, "function '{s}' takes {d} arguments, got {d}", .{ ref.full, ref.params.len, args.len });
+            }
+            return ref;
+        }
+        var best: ?*FuncRef = null;
+        var best_cost: usize = std.math.maxInt(usize);
+        var tied = false;
+        var any_arity = false;
+        for (cands.items) |ref| {
+            if (ref.params.len != args.len) continue;
+            any_arity = true;
+            var total: usize = 0;
+            var viable = true;
+            for (ref.params, args) |pm, a| {
+                const ak = try self.argKindSid(a);
+                const c = convCost(ak.kind, ak.sid, ak.elem, pm.kind, pm.sid, pm.elem_kind) orelse {
+                    viable = false;
+                    break;
+                };
+                total += c;
+            }
+            if (!viable) continue;
+            if (best == null or total < best_cost) {
+                best = ref;
+                best_cost = total;
+                tied = false;
+            } else if (total == best_cost) {
+                tied = true;
+            }
+        }
+        if (best == null) {
+            if (!any_arity) {
+                return self.err(off, "no overload of '{s}' takes {d} arguments", .{ src, args.len });
+            }
+            return self.err(off, "no matching overload of '{s}' for these argument types", .{src});
+        }
+        if (tied) {
+            return self.err(off, "call to '{s}' is ambiguous", .{src});
+        }
+        const ref = best.?;
+        if (meth == null and ref.is_method and !ref.is_static) {
+            return self.err(off, "method '{s}' needs an object (write obj.{s}(...))", .{ cname, src });
+        }
+        return ref;
     }
 
     fn findFunc(self: *Codegen, name: []const u8) ?*FuncRef {
@@ -377,9 +618,9 @@ pub const Codegen = struct {
     pub fn compile(self: *Codegen) CompileError!void {
         try self.computeLayouts();
         try self.indexFuncs();
-        for (self.p.funcs.items) |*f| {
+        for (self.p.funcs.items, 0..) |*f, fi| {
             if (f.is_dtor) continue;
-            try self.genFunc(f);
+            try self.genFunc(f, fi);
         }
         // Header: imports + string consts, then the buffered body.
         // (Body is emitted directly to out; header first: two-phase via buffer.)
@@ -485,8 +726,9 @@ pub const Codegen = struct {
 
     // -- functions ---------------------------------------------------------------
 
-    fn genFunc(self: *Codegen, f: *par.Func) CompileError!void {
-        const ref = self.findFuncExact(f) orelse return self.err(f.off, "internal: function not indexed", .{});
+    fn genFunc(self: *Codegen, f: *par.Func, fi: usize) CompileError!void {
+        const fi_ref = if (fi < self.fref_of_func.items.len) self.fref_of_func.items[fi] else null;
+        const ref = if (fi_ref) |ri| &self.funcrefs.items[ri] else return self.err(f.off, "internal: function not indexed", .{});
         self.bindings.clearRetainingCapacity();
         self.temps.clearRetainingCapacity();
         self.loops.clearRetainingCapacity();
@@ -506,7 +748,7 @@ pub const Codegen = struct {
         }
 
         // Header.
-        const fname: []const u8 = if (self.is_main) "main" else ref.full;
+        const fname: []const u8 = if (self.is_main) "main" else ref.mangled;
         // Build param list text.
         var plist: std.array_list.Managed(u8) = .init(self.gpa);
         defer plist.deinit();
@@ -570,15 +812,6 @@ pub const Codegen = struct {
             }
         }
         self.depth = 0;
-    }
-
-    fn findFuncExact(self: *Codegen, f: *par.Func) ?*FuncRef {
-        const full = std.fmt.allocPrint(self.gpa, "{s}{s}", .{ f.qual, f.name }) catch return null;
-        defer self.gpa.free(full);
-        for (self.funcrefs.items) |*r| {
-            if (std.mem.eql(u8, r.full, full)) return r;
-        }
-        return null;
     }
 
     // -- statements ------------------------------------------------------------------
@@ -1893,16 +2126,11 @@ pub const Codegen = struct {
                 }
                 const nm = try self.normalizeCallName(ce.kind.ident);
                 defer if (nm.ptr != ce.kind.ident.ptr) self.gpa.free(nm);
-                const ref = self.findFunc(nm) orelse {
-                    return self.err(ce.off, "unknown function '{s}'", .{ce.kind.ident});
-                };
-                if (ref.is_method and !ref.is_static) {
-                    return self.err(ce.off, "method '{s}' needs an object (write obj.{s}(...))", .{ nm, ce.kind.ident });
-                }
+                const ref = try self.resolveCall(nm, ce.kind.ident, c.args, ce.off, null);
                 return ref.ret_kind;
             },
             .method_call => |m| {
-                const ref = try self.methodFuncRef(m.obj, m.name, ex.off);
+                const ref = try self.methodFuncRef(m.obj, m.name, m.args, ex.off);
                 return ref.ret_kind;
             },
             .index => |ix| return self.indexElemKind(ix.base, ex.off),
@@ -1929,7 +2157,7 @@ pub const Codegen = struct {
     }
 
     /// Resolve a method callee to its FuncRef (shared by genMethodCall/typeof).
-    fn methodFuncRef(self: *Codegen, obj: par.Eid, name: []const u8, off: usize) CompileError!*FuncRef {
+    fn methodFuncRef(self: *Codegen, obj: par.Eid, name: []const u8, args: []par.Eid, off: usize) CompileError!*FuncRef {
         const oe = self.p.exprs.items[obj];
         var sid: ?usize = null;
         if (oe.kind == .ident) {
@@ -1951,9 +2179,13 @@ pub const Codegen = struct {
         const sdef = self.p.structs.items[sid.?];
         const full = try std.fmt.allocPrint(self.gpa, "{s}{s}_{s}", .{ sdef.qual, sdef.name, name });
         defer self.gpa.free(full);
-        return self.findFunc(full) orelse {
+        var probe: std.array_list.Managed(*FuncRef) = .init(self.gpa);
+        defer probe.deinit();
+        try self.collectCands(full, &probe);
+        if (probe.items.len == 0) {
             return self.err(off, "struct '{s}' has no method '{s}'", .{ sdef.name, name });
-        };
+        }
+        return self.resolveCall(full, name, args, off, name);
     }
 
     fn genExpr(self: *Codegen, e: par.Eid) CompileError!Val {
@@ -2309,41 +2541,9 @@ pub const Codegen = struct {
             return self.err(ce.off, "indirect calls are not supported in v0.1", .{});
         }
         // `A::f` → `A_f` ( SA names never contain `::` ).
-        var cname = ce.kind.ident;
-        var owned_name = false;
-        if (std.mem.indexOf(u8, cname, "::") != null) {
-            const buf = try self.gpa.dupe(u8, cname);
-            for (buf) |*ch| {
-                if (ch.* == ':') ch.* = '_';
-            }
-            // Collapse the doubled underscore from `::`.
-            var w: usize = 0;
-            var i: usize = 0;
-            while (i < buf.len) {
-                if (buf[i] == '_' and i + 1 < buf.len and buf[i + 1] == '_') {
-                    buf[w] = '_';
-                    w += 1;
-                    i += 2;
-                } else {
-                    buf[w] = buf[i];
-                    w += 1;
-                    i += 1;
-                }
-            }
-            cname = buf[0..w];
-            owned_name = true;
-        }
-        defer if (owned_name) self.gpa.free(cname);
-        const ref = self.findFunc(cname) orelse {
-            return self.err(ce.off, "unknown function '{s}'", .{ce.kind.ident});
-        };
-        const want_this = (ref.is_method and !ref.is_static);
-        if (want_this) {
-            return self.err(ce.off, "method '{s}' needs an object (write obj.{s}(...))", .{ cname, ce.kind.ident });
-        }
-        if (args.len != ref.params.len) {
-            return self.err(off, "function '{s}' takes {d} arguments, got {d}", .{ ref.full, ref.params.len, args.len });
-        }
+        const cname = try self.normalizeCallName(ce.kind.ident);
+        defer if (cname.ptr != ce.kind.ident.ptr) self.gpa.free(cname);
+        const ref = try self.resolveCall(cname, ce.kind.ident, args, off, null);
         var argtxt: std.array_list.Managed(u8) = .init(self.gpa);
         defer argtxt.deinit();
         {
@@ -2365,12 +2565,12 @@ pub const Codegen = struct {
             try argtxt.appendSlice(aw.written());
         }
         if (ref.ret_kind == .none) {
-            try self.emit("call @{s}({s})", .{ ref.full, argtxt.items });
+            try self.emit("call @{s}({s})", .{ ref.mangled, argtxt.items });
             return .{ .txt = "0", .kind = .i32, .owned = false, .is_temp = false };
         }
         const t = try self.newTemp();
         try self.addTemp(t, true);
-        try self.emit("{s} = call @{s}({s})", .{ t, ref.full, argtxt.items });
+        try self.emit("{s} = call @{s}({s})", .{ t, ref.mangled, argtxt.items });
         return .{ .txt = t, .kind = ref.ret_kind, .owned = true, .is_temp = true, .sid = ref.ret_sid };
     }
 
@@ -2399,13 +2599,14 @@ pub const Codegen = struct {
         const sdef = self.p.structs.items[sid.?];
         const full = try std.fmt.allocPrint(self.gpa, "{s}{s}_{s}", .{ sdef.qual, sdef.name, name });
         defer self.gpa.free(full);
-        const ref = self.findFunc(full) orelse {
+        var probe: std.array_list.Managed(*FuncRef) = .init(self.gpa);
+        defer probe.deinit();
+        try self.collectCands(full, &probe);
+        if (probe.items.len == 0) {
             return self.err(off, "struct '{s}' has no method '{s}'", .{ sdef.name, name });
-        };
-        const this_count: usize = if (ref.is_method and !ref.is_static) 1 else 0;
-        if (args.len + this_count != ref.params.len + this_count or args.len != ref.params.len) {
-            return self.err(off, "method '{s}' takes {d} arguments, got {d}", .{ name, ref.params.len, args.len });
         }
+        const ref = try self.resolveCall(full, name, args, off, name);
+        const this_count: usize = if (ref.is_method and !ref.is_static) 1 else 0;
         var argtxt: std.array_list.Managed(u8) = .init(self.gpa);
         defer argtxt.deinit();
         {
@@ -2427,12 +2628,12 @@ pub const Codegen = struct {
             try argtxt.appendSlice(aw.written());
         }
         if (ref.ret_kind == .none) {
-            try self.emit("call @{s}({s})", .{ ref.full, argtxt.items });
+            try self.emit("call @{s}({s})", .{ ref.mangled, argtxt.items });
             return .{ .txt = "0", .kind = .i32, .owned = false, .is_temp = false };
         }
         const t = try self.newTemp();
         try self.addTemp(t, true);
-        try self.emit("{s} = call @{s}({s})", .{ t, ref.full, argtxt.items });
+        try self.emit("{s} = call @{s}({s})", .{ t, ref.mangled, argtxt.items });
         return .{ .txt = t, .kind = ref.ret_kind, .owned = true, .is_temp = true, .sid = ref.ret_sid };
     }
 

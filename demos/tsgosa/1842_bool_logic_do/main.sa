@@ -9,10 +9,11 @@ L_cpp_do_0:
   cpp_t_0 = add n, 1
   !n
   n = cpp_t_0
+L_cpp_dcont_1:
   cpp_t_1 = slt n, 3
   cpp_t_2 = and f, cpp_t_1
-  br cpp_t_2 -> L_cpp_do_0, L_cpp_dend_1
-L_cpp_dend_1:
+  br cpp_t_2 -> L_cpp_do_0, L_cpp_dend_2
+L_cpp_dend_2:
   cpp_t_3 = sext n as i64
   cpp_t_4 = alloc 64
   cpp_t_5 = alloc 8

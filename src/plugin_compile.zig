@@ -138,3 +138,61 @@ test "end-to-end hello emits @main" {
     try std.testing.expect(std.mem.indexOf(u8, sa, "@add(a: i32, b: i32) -> i32:") != null);
     try std.testing.expect(std.mem.indexOf(u8, sa, "sa_print_bytes") != null);
 }
+
+test "end-to-end overloads resolve by arity and type" {
+    const gpa = std.testing.allocator;
+    const src =
+        \\int add(int a, int b) { return a + b; }
+        \\double add(double a, double b) { return a + b; }
+        \\int add(int a, int b, int c) { return a + b + c; }
+        \\int main() { int x = add(1, 2); double y = add(1.5, 2.5); int z = add(1, 2, 3); return x + z; }
+    ;
+    var diag = Diag.init(gpa);
+    defer diag.deinit();
+    var abuf: std.Io.Writer.Allocating = .init(gpa);
+    defer abuf.deinit();
+    try compileSource(gpa, src, &abuf.writer, &diag);
+    const sa = abuf.written();
+    // Overloaded definitions each own one mangled SA symbol; single-name
+    // output elsewhere is untouched (see the hello test above).
+    try std.testing.expect(std.mem.indexOf(u8, sa, "@add__i32_i32(a: i32, b: i32) -> i32:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sa, "@add__f64_f64(a: f64, b: f64) -> f64:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sa, "@add__i32_i32_i32(a: i32, b: i32, c: i32) -> i32:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sa, "call @add__i32_i32(1, 2)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sa, "call @add__f64_f64(1.5, 2.5)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sa, "call @add__i32_i32_i32(1, 2, 3)") != null);
+}
+
+test "overload ambiguity and no-match are explicit errors" {
+    const gpa = std.testing.allocator;
+    // bool converts equally to int and long: genuinely ambiguous (as in C++).
+    const amb =
+        \\int f(int x) { return x; }
+        \\int f(long x) { return 2; }
+        \\int main() { bool b = true; int y = f(b); return y; }
+    ;
+    {
+        var diag = Diag.init(gpa);
+        defer diag.deinit();
+        var abuf: std.Io.Writer.Allocating = .init(gpa);
+        defer abuf.deinit();
+        const r = compileSource(gpa, amb, &abuf.writer, &diag);
+        try std.testing.expectError(error.CodegenError, r);
+        try std.testing.expect(std.mem.indexOf(u8, diag.msg, "ambiguous") != null);
+    }
+    // No arity fits.
+    const nomatch =
+        \\int f(int x) { return x; }
+        \\int f(int x, int y) { return y; }
+        \\int main() { int y = f(1, 2, 3); return y; }
+    ;
+    {
+        var diag = Diag.init(gpa);
+        defer diag.deinit();
+        var abuf: std.Io.Writer.Allocating = .init(gpa);
+        defer abuf.deinit();
+        const r = compileSource(gpa, nomatch, &abuf.writer, &diag);
+        try std.testing.expectError(error.CodegenError, r);
+        try std.testing.expect(std.mem.indexOf(u8, diag.msg, "no overload") != null);
+    }
+}

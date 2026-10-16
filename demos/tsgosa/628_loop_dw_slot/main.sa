@@ -30,8 +30,9 @@ L_cpp_do_0:
   !cpp_t_3
   !cpp_t_2
   !cpp_t_1
+L_cpp_dcont_1:
   cpp_t_12 = slt n, 2
-  br cpp_t_12 -> L_cpp_do_0, L_cpp_dend_1
-L_cpp_dend_1:
+  br cpp_t_12 -> L_cpp_do_0, L_cpp_dend_2
+L_cpp_dend_2:
   !n
   ret 0

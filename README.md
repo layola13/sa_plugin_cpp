@@ -35,7 +35,7 @@ zig build test       # unit tests (lexer/parser/codegen/leakcheck, no output = g
 
 ## Demos & acceptance
 
-`demos/basic/01..26` mirror the `sa_plugin_sla` demo conventions
+`demos/basic/01..27` mirror the `sa_plugin_sla` demo conventions
 (`main.cpp` + `expected.stdout` + reviewed `main.sa` + `README.md`).
 `sweep.sh` enforces the whole chain per demo
 (cpp build → committed `main.sa` in sync → `sa check` → run → diff):
@@ -46,9 +46,9 @@ BACKEND=exe sh tools/sweep.sh    # native backend (needs LLVM-built sa)
 REGEN=1 sh tools/sweep.sh        # refresh committed main.sa files
 ```
 
-Current acceptance: **255/255 pass on both `js` and `exe` backends**
-(26 basic + 225 tsgosa rule-corpus ports + 4 refusal demos),
-plus `zig build test` green (17 unit tests + 11 leakcheck tests).
+Current acceptance: **257/257 pass on the `js` backend**
+(27 basic + 225 tsgosa rule-corpus ports + 5 refusal demos),
+plus `zig build test` green (22 tests, incl. leakcheck and overload suites).
 
 Known backend divergence we pin in lowering (see `demos/tsgosa/PORTING.md`
 and code comments): `i32` shifts wrap to 32 bits on js but stay wide on
@@ -76,7 +76,11 @@ sa cpp build-exe /tmp/cpp_app/src/main.cpp -o /tmp/main   # via host `sa`
 ## v0.1 language subset (honest list)
 
 Supported: free functions (`int`/`long`/`float`/`double`/`bool`/`char`/
-`void`, pointers, `const`-stripped params); locals with init, assignment +
+`void`, pointers incl. bare `long*`, `const`-stripped params) **plus
+function overloading** (best match by arity then conversion rank;
+ambiguity / no-match / exact-duplicate definitions are explicit errors;
+each overload owns one mangled SA symbol, single functions keep bare
+names); locals with init, assignment +
 compound assignment, prefix/postfix `++`/`--`; `if`/`else`, `while`,
 `do`-`while`, `for(;;)`, range-`for` over fixed arrays, `switch` (lowered to
 an if-chain), `return`/`break`/`continue`; arithmetic/comparison/logical/

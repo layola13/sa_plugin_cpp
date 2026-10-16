@@ -762,6 +762,14 @@ pub const Parser = struct {
                 return self.finishType(base_ty);
             }
         }
+        // Bare `long` / `unsigned` followed by a non-type token (`*`, `&`,
+        // `)`, `,` ...) — e.g. `long* p`, `f(unsigned)` — mean plain int
+        // (i64 when long). Previously this fell through to "expected a type".
+        if ((long_count > 0 or is_unsigned) and self.peek().tag != .ident) {
+            var base_ty = CType{ .prim = .i32 };
+            if (long_count > 0) base_ty.prim = .i64;
+            return self.finishType(base_ty);
+        }
         const t = self.peek();
         if (t.tag != .ident) return self.err(t.start, "expected a type", .{});
         const word = t.text(self.source);
@@ -1941,4 +1949,25 @@ test "parser refuses template-id in param type with explicit message" {
     const r = p.parseUnit();
     try std.testing.expectError(error.ParseError, r);
     try std.testing.expect(std.mem.indexOf(u8, diag.msg, "templates are not supported") != null);
+}
+
+test "parser accepts bare long pointers and lone long params" {
+    // `long* p` / `f(unsigned)` used to die with "expected a type": a bare
+    // long/unsigned with no base-type name means plain int (i64 when long).
+    const gpa = std.testing.allocator;
+    const src =
+        \\int get(long* p) { return p[0]; }
+        \\int take(unsigned n) { return 1; }
+        \\int main() { int a[2]; a[0] = 7; int y = get(a); return y + take(1); }
+    ;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const agpa = arena.allocator();
+    var lex1 = lex.Lexer.init(src);
+    var diag = Diag.init(agpa);
+    const toks = try lex1.tokenize(agpa, &diag);
+    var p = Parser.create(agpa, src, toks, &diag);
+    defer p.deinit();
+    try p.parseUnit();
+    try std.testing.expectEqual(@as(usize, 3), p.funcs.items.len);
 }

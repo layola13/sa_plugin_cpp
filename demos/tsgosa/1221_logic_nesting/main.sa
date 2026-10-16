@@ -1,0 +1,131 @@
+@import "sa_std/io/print.sai"
+@import "sa_std/fmt.sai"
+@import "sa_std/string.sai"
+@const str_0 = utf8:"\n"
+@main() -> i32:
+  o = 1
+  z = 0
+  cpp_tr_0 = 0
+  br o -> L_cpp_tern_0, L_cpp_tere_1
+L_cpp_tern_0:
+  !cpp_tr_0
+  cpp_tr_0 = 2
+  jmp L_cpp_term_2
+L_cpp_tere_1:
+  !cpp_tr_0
+  cpp_tr_0 = 0
+  jmp L_cpp_term_2
+L_cpp_term_2:
+  cpp_t_1 = add cpp_tr_0, 0
+  !cpp_tr_0
+  a1 = cpp_t_1
+  cpp_tr_2 = 0
+  br z -> L_cpp_tern_3, L_cpp_tere_4
+L_cpp_tern_3:
+  !cpp_tr_2
+  cpp_tr_2 = 3
+  jmp L_cpp_term_5
+L_cpp_tere_4:
+  !cpp_tr_2
+  cpp_tr_2 = 0
+  jmp L_cpp_term_5
+L_cpp_term_5:
+  cpp_t_3 = add cpp_tr_2, 0
+  !cpp_tr_2
+  b1 = cpp_t_3
+  cpp_tr_4 = 0
+  br a1 -> L_cpp_tern_6, L_cpp_tere_7
+L_cpp_tern_6:
+  !cpp_tr_4
+  cpp_t_5 = add a1, 0
+  cpp_tr_4 = cpp_t_5
+  jmp L_cpp_term_8
+L_cpp_tere_7:
+  !cpp_tr_4
+  cpp_t_6 = add b1, 0
+  cpp_tr_4 = cpp_t_6
+  jmp L_cpp_term_8
+L_cpp_term_8:
+  cpp_t_7 = add cpp_tr_4, 0
+  !cpp_tr_4
+  r1 = cpp_t_7
+  cpp_t_8 = sext r1 as i64
+  cpp_t_9 = alloc 64
+  cpp_t_10 = alloc 8
+  cpp_t_11 = call @sa_fmt_i64_into(cpp_t_8, 10, cpp_t_9, 64, &cpp_t_10)
+  cpp_t_12 = load cpp_t_10 + 0 as u64
+  cpp_t_13 = alloc 16
+  store cpp_t_13 + 0, cpp_t_9 as ptr
+  store cpp_t_13 + 8, cpp_t_12 as u64
+  cpp_t_14 = load cpp_t_13 + 0 as ptr
+  cpp_t_15 = load cpp_t_13 + 8 as u64
+  call @sa_print_bytes(&cpp_t_14, cpp_t_15)
+  cpp_t_16 = alloc 16
+  store cpp_t_16 + 0, &str_0 as ptr
+  store cpp_t_16 + 8, 1 as u64
+  cpp_t_17 = load cpp_t_16 + 0 as ptr
+  cpp_t_18 = load cpp_t_16 + 8 as u64
+  call @sa_print_bytes(&cpp_t_17, cpp_t_18)
+  cpp_tr_19 = 0
+  br z -> L_cpp_tern_9, L_cpp_tere_10
+L_cpp_tern_9:
+  !cpp_tr_19
+  cpp_tr_19 = 0
+  jmp L_cpp_term_11
+L_cpp_tere_10:
+  !cpp_tr_19
+  cpp_tr_19 = 0
+  jmp L_cpp_term_11
+L_cpp_term_11:
+  cpp_t_20 = add cpp_tr_19, 0
+  !cpp_tr_19
+  a2 = cpp_t_20
+  cpp_tr_21 = 0
+  br a2 -> L_cpp_tern_12, L_cpp_tere_13
+L_cpp_tern_12:
+  !cpp_tr_21
+  cpp_tr_21 = 5
+  jmp L_cpp_term_14
+L_cpp_tere_13:
+  !cpp_tr_21
+  cpp_tr_21 = 0
+  jmp L_cpp_term_14
+L_cpp_term_14:
+  cpp_t_22 = add cpp_tr_21, 0
+  !cpp_tr_21
+  r2 = cpp_t_22
+  cpp_t_23 = sext r2 as i64
+  cpp_t_24 = alloc 64
+  cpp_t_25 = alloc 8
+  cpp_t_26 = call @sa_fmt_i64_into(cpp_t_23, 10, cpp_t_24, 64, &cpp_t_25)
+  cpp_t_27 = load cpp_t_25 + 0 as u64
+  cpp_t_28 = alloc 16
+  store cpp_t_28 + 0, cpp_t_24 as ptr
+  store cpp_t_28 + 8, cpp_t_27 as u64
+  cpp_t_29 = load cpp_t_28 + 0 as ptr
+  cpp_t_30 = load cpp_t_28 + 8 as u64
+  call @sa_print_bytes(&cpp_t_29, cpp_t_30)
+  cpp_t_31 = alloc 16
+  store cpp_t_31 + 0, &str_0 as ptr
+  store cpp_t_31 + 8, 1 as u64
+  cpp_t_32 = load cpp_t_31 + 0 as ptr
+  cpp_t_33 = load cpp_t_31 + 8 as u64
+  call @sa_print_bytes(&cpp_t_32, cpp_t_33)
+  !cpp_t_31
+  !cpp_t_28
+  !cpp_t_26
+  !cpp_t_25
+  !cpp_t_24
+  !cpp_t_16
+  !cpp_t_13
+  !cpp_t_11
+  !cpp_t_10
+  !cpp_t_9
+  !r2
+  !a2
+  !r1
+  !b1
+  !a1
+  !z
+  !o
+  ret 0

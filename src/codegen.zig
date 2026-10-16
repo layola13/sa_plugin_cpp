@@ -133,6 +133,7 @@ pub const Codegen = struct {
     temps: std.array_list.Managed(Temp),
     loops: std.array_list.Managed(LoopCtx),
     depth: usize = 0,
+    tern_depth: usize = 0,
     terminated: bool = false,
     ret_kind: VKind = .none,
     ret_sid: ?usize = null,
@@ -490,6 +491,7 @@ pub const Codegen = struct {
         self.temps.clearRetainingCapacity();
         self.loops.clearRetainingCapacity();
         self.depth = 0;
+        self.tern_depth = 0;
         self.terminated = false;
         self.cur_qual = f.qual;
         self.cur_sid = ref.sid;
@@ -793,7 +795,201 @@ pub const Codegen = struct {
         return self.conv(c, .i32, self.p.exprs.items[e].off);
     }
 
+    const ConstVal = union(enum) { i: i64, f: f64, b: bool };
+
+    /// Compile-time evaluate a side-effect-free constant condition.
+    /// Returns null when the expression is not a constant.
+    fn constFoldCond(self: *Codegen, e: par.Eid) CompileError!?bool {
+        const v = try self.constFold(e);
+        if (v == null) return null;
+        return switch (v.?) {
+            .i => |n| n != 0,
+            .f => |n| n != 0.0,
+            .b => |x| x,
+        };
+    }
+
+    fn constFold(self: *Codegen, e: par.Eid) CompileError!?ConstVal {
+        const ex = self.p.exprs.items[e];
+        switch (ex.kind) {
+            .int_lit => |raw| {
+                const n = par.parseIntLit(raw) catch return null;
+                return .{ .i = n };
+            },
+            .float_lit => |raw| {
+                const n = std.fmt.parseFloat(f64, raw) catch return null;
+                return .{ .f = n };
+            },
+            .bool_lit => |b| return .{ .b = b },
+            .char_lit => |raw| {
+                const inner = raw[1 .. raw.len - 1];
+                const v = par.charValue(inner) catch return null;
+                return .{ .i = @intCast(v) };
+            },
+            .null_lit => return .{ .i = 0 },
+            .unary => |u| {
+                const x = (try self.constFold(u.x)) orelse return null;
+                switch (u.op) {
+                    .neg => switch (x) {
+                        .i => |n| {
+                            // i32 operands wrap (matches runtime lowering).
+                            if (n >= -2147483648 and n <= 2147483647) {
+                                const w: i32 = @intCast(n);
+                                return .{ .i = 0 -% w };
+                            }
+                            return .{ .i = -n };
+                        },
+                        .f => |n| return .{ .f = -n },
+                        .b => return null,
+                    },
+                    .not => switch (x) {
+                        .i => |n| return .{ .b = n == 0 },
+                        .f => |n| return .{ .b = n == 0.0 },
+                        .b => |y| return .{ .b = !y },
+                    },
+                    .bnot => switch (x) {
+                        .i => |n| return .{ .i = ~n },
+                        .f, .b => return null,
+                    },
+                    else => return null,
+                }
+            },
+            .binary => |b| {
+                const l = (try self.constFold(b.l)) orelse return null;
+                const r = (try self.constFold(b.r)) orelse return null;
+                if (l == .f or r == .f) {
+                    const lf: f64 = if (l == .f) l.f else @floatFromInt(l.i);
+                    const rf: f64 = if (r == .f) r.f else @floatFromInt(r.i);
+                    switch (b.op) {
+                        .add => return .{ .f = lf + rf },
+                        .sub => return .{ .f = lf - rf },
+                        .mul => return .{ .f = lf * rf },
+                        .div => return .{ .f = lf / rf },
+                        .lt => return .{ .b = lf < rf },
+                        .le => return .{ .b = lf <= rf },
+                        .gt => return .{ .b = lf > rf },
+                        .ge => return .{ .b = lf >= rf },
+                        .eq => return .{ .b = lf == rf },
+                        .ne => return .{ .b = lf != rf },
+                        else => return null,
+                    }
+                }
+                const li: i64 = if (l == .i) l.i else (if (l.b) @as(i64, 1) else 0);
+                const ri: i64 = if (r == .i) r.i else (if (r.b) @as(i64, 1) else 0);
+                // Both sides fit i32: fold with 32-bit wraparound so folded
+                // conditions agree with the i32 runtime lowering.
+                if (li >= -2147483648 and li <= 2147483647 and ri >= -2147483648 and ri <= 2147483647) {
+                    const a: i32 = @intCast(li);
+                    const bb: i32 = @intCast(ri);
+                    switch (b.op) {
+                        .add => return .{ .i = a +% bb },
+                        .sub => return .{ .i = a -% bb },
+                        .mul => return .{ .i = a *% bb },
+                        .div => {
+                            if (bb == 0 or (a == -2147483648 and bb == -1)) return null;
+                            return .{ .i = @divTrunc(a, bb) };
+                        },
+                        .rem => {
+                            if (bb == 0 or (a == -2147483648 and bb == -1)) return null;
+                            return .{ .i = @rem(a, bb) };
+                        },
+                        .shl => return .{ .i = a << @intCast(bb & 31) },
+                        .shr => return .{ .i = a >> @intCast(bb & 31) },
+                        .lt => return .{ .b = a < bb },
+                        .le => return .{ .b = a <= bb },
+                        .gt => return .{ .b = a > bb },
+                        .ge => return .{ .b = a >= bb },
+                        .eq => return .{ .b = a == bb },
+                        .ne => return .{ .b = a != bb },
+                        .bit_and => return .{ .i = a & bb },
+                        .bit_or => return .{ .i = a | bb },
+                        .bit_xor => return .{ .i = a ^ bb },
+                        .log_and => return .{ .b = (a != 0) and (bb != 0) },
+                        .log_or => return .{ .b = (a != 0) or (bb != 0) },
+                        else => return null,
+                    }
+                }
+                switch (b.op) {
+                    .add => return .{ .i = li + ri },
+                    .sub => return .{ .i = li - ri },
+                    .mul => return .{ .i = li * ri },
+                    .div => return if (ri == 0) null else .{ .i = @divTrunc(li, ri) },
+                    .rem => return if (ri == 0) null else .{ .i = @rem(li, ri) },
+                    .shl => return .{ .i = li << @intCast(@abs(ri) & 63) },
+                    .shr => return .{ .i = li >> @intCast(@abs(ri) & 63) },
+                    .lt => return .{ .b = li < ri },
+                    .le => return .{ .b = li <= ri },
+                    .gt => return .{ .b = li > ri },
+                    .ge => return .{ .b = li >= ri },
+                    .eq => return .{ .b = li == ri },
+                    .ne => return .{ .b = li != ri },
+                    .bit_and => return .{ .i = li & ri },
+                    .bit_or => return .{ .i = li | ri },
+                    .bit_xor => return .{ .i = li ^ ri },
+                    .log_and => return .{ .b = (li != 0) and (ri != 0) },
+                    .log_or => return .{ .b = (li != 0) or (ri != 0) },
+                    else => return null,
+                }
+            },
+            .cast => |c| {
+                // Only fold casts of constants to scalar kinds.
+                const x = (try self.constFold(c.x)) orelse return null;
+                const rt = try self.resolveType(c.ty, ex.off);
+                switch (rt.kind) {
+                    .f64 => switch (x) {
+                        .i => |n| return .{ .f = @floatFromInt(n) },
+                        .f => return .{ .f = x.f },
+                        .b => |y| return .{ .f = if (y) 1.0 else 0.0 },
+                    },
+                    .i32, .i64, .boolean => switch (x) {
+                        .i => return .{ .i = x.i },
+                        .f => |n| return .{ .i = @intFromFloat(n) },
+                        .b => |y| return .{ .i = if (y) 1 else 0 },
+                    },
+                    else => return null,
+                }
+            },
+            .sizeof_ty => |ty| {
+                const rt = try self.resolveType(ty, ex.off);
+                const sz: usize = if (rt.kind == .ptr and rt.sid != null)
+                    self.layouts.items[rt.sid.?].size
+                else if (rt.kind == .none)
+                    return null
+                else
+                    primSize(rt.kind);
+                return .{ .i = @intCast(sz) };
+            },
+            else => return null,
+        }
+    }
+
+    /// Compile-time truthiness when `v` is a literal (null = not literal).
+    fn literalTruth(self: *Codegen, v: Val) ?bool {
+        if (v.is_temp) return null;
+        if (self.lookup(v.txt) != null) return null;
+        return switch (v.kind) {
+            .i32, .i64, .boolean => {
+                const n = std.fmt.parseInt(i64, v.txt, 10) catch return null;
+                return n != 0;
+            },
+            .f64 => {
+                const n = std.fmt.parseFloat(f64, v.txt) catch return null;
+                return n != 0.0;
+            },
+            .ptr, .slice => return !std.mem.eql(u8, v.txt, "0"),
+            .none => return null,
+        };
+    }
+
     fn genIf(self: *Codegen, _: usize, cond: par.Eid, then_body: []par.Sid, else_body: []par.Sid, has_else: bool) CompileError!void {
+        if (try self.constFoldCond(cond)) |taken| {
+            if (taken) {
+                try self.genBlock(then_body);
+            } else if (has_else) {
+                try self.genBlock(else_body);
+            }
+            return;
+        }
         const cv = try self.condVal(cond);
         const l_then = try self.newLabel("then");
         const l_merge = try self.newLabel("endif");
@@ -823,6 +1019,23 @@ pub const Codegen = struct {
         const l_top = try self.newLabel("while");
         const l_body = try self.newLabel("wbody");
         const l_end = try self.newLabel("wend");
+        if (try self.constFoldCond(cond)) |taken| {
+            if (!taken) {
+                // Body is dead: still need the end label for breaks? No —
+                // nothing references it. Emit nothing.
+                return;
+            }
+            try self.emitLabel(l_body);
+            try self.emit("jmp {s}", .{l_top});
+            try self.emitLabel(l_top);
+            try self.loops.append(.{ .cont_label = l_top, .break_label = l_end, .depth = self.depth });
+            try self.genBlock(body);
+            _ = self.loops.pop();
+            if (!self.terminated) try self.emit("jmp {s}", .{l_top});
+            self.terminated = false;
+            try self.emitLabel(l_end);
+            return;
+        }
         try self.emitLabel(l_top);
         const cv = try self.condVal(cond);
         try self.emit("br {s} -> {s}, {s}", .{ cv.txt, l_body, l_end });
@@ -843,8 +1056,12 @@ pub const Codegen = struct {
         try self.genBlock(body);
         _ = self.loops.pop();
         if (!self.terminated) {
-            const cv = try self.condVal(cond);
-            try self.emit("br {s} -> {s}, {s}", .{ cv.txt, l_body, l_end });
+            if (try self.constFoldCond(cond)) |taken| {
+                if (taken) try self.emit("jmp {s}", .{l_body});
+            } else {
+                const cv = try self.condVal(cond);
+                try self.emit("br {s} -> {s}, {s}", .{ cv.txt, l_body, l_end });
+            }
         }
         self.terminated = false;
         try self.emitLabel(l_end);
@@ -863,8 +1080,25 @@ pub const Codegen = struct {
         const l_end = try self.newLabel("fend");
         try self.emitLabel(l_top);
         if (has_cond) {
-            const cv = try self.condVal(cond);
-            try self.emit("br {s} -> {s}, {s}", .{ cv.txt, l_body, l_end });
+            if (try self.constFoldCond(cond)) |taken| {
+                if (!taken) {
+                    // Rest is dead: still emit end label for breaks.
+                    try self.emitLabel(l_body);
+                    try self.emitLabel(l_step);
+                    try self.emitLabel(l_end);
+                    try self.releaseAbove(mark);
+                    self.popTo(mark);
+                    while (self.temps.items.len > tmark) {
+                        _ = self.temps.pop();
+                    }
+                    self.depth -= 1;
+                    return;
+                }
+                try self.emit("jmp {s}", .{l_body});
+            } else {
+                const cv = try self.condVal(cond);
+                try self.emit("br {s} -> {s}, {s}", .{ cv.txt, l_body, l_end });
+            }
         } else {
             try self.emit("jmp {s}", .{l_body});
         }
@@ -1369,6 +1603,23 @@ pub const Codegen = struct {
             .log_or => "or",
             else => "add",
         };
+        if (op == .shl and lkind != .f64 and lkind != .i64) {
+            // Pin 32-bit wraparound identically on every backend: js
+            // narrows bitwise results to int32 while interp/llvm keep full
+            // width, so a bare `shl` into the sign bit disagrees across
+            // backends. `(shl X,32)` then `(ashr X,32)` is identity on
+            // already-32-bit values and wraps wide ones, on every backend
+            // (js masks shift counts to 5 bits; wide backends shift fully).
+            // Idempotent: stays correct if a backend ever narrows itself.
+            const raw = try self.newTemp();
+            try self.addTemp(raw, false);
+            const w1 = try self.newTemp();
+            try self.addTemp(w1, false);
+            try self.emit("{s} = shl {s}, {s}", .{ raw, ltxt, rtxt });
+            try self.emit("{s} = shl {s}, 32", .{ w1, raw });
+            try self.emit("{s} = ashr {s}, 32", .{ dst, w1 });
+            return;
+        }
         try self.emit("{s} = {s} {s}, {s}", .{ dst, o, ltxt, rtxt });
     }
 
@@ -1852,6 +2103,10 @@ pub const Codegen = struct {
                 return .{ .txt = t, .kind = rk, .owned = false, .is_temp = true };
             },
             .ternary => |tr| {
+                if (try self.constFoldCond(tr.c)) |taken| {
+                    const picked = if (taken) tr.t else tr.f;
+                    return self.genExpr(picked);
+                }
                 const tk = try self.typeofExpr(tr.t);
                 const fk = try self.typeofExpr(tr.f);
                 const chv = try self.condVal(tr.c);
@@ -1881,11 +2136,20 @@ pub const Codegen = struct {
                 if (want != .ptr and want != .slice and !want.isScalar()) {
                     return self.err(ex.off, "ternary supports scalars and pointers in v0.1", .{});
                 }
+                // Nested ternaries (inside another ternary arm) run with
+                // tern_depth > 0. Scalar results copy out at the merge and
+                // never touch scope releases, so they nest freely. Pointer
+                // results must live in a scope-dominating binding, which a
+                // nested site cannot provide: reject those explicitly.
+                if ((want == .ptr or want == .slice) and self.tern_depth > 0) {
+                    return self.err(ex.off, "nested ternary yielding a pointer is not supported in v0.1", .{});
+                }
                 const res = try self.newHidden("tr");
                 const zero: []const u8 = if (want == .f64) "0.0" else "0";
                 try self.emit("{s} = {s}", .{ res, zero });
                 _ = try self.addBinding(res, want, null, true);
                 const res_idx = self.bindings.items.len - 1;
+                self.tern_depth += 1;
                 try self.emit("br {s} -> {s}, {s}", .{ chv.txt, l_then, l_else });
                 try self.emitLabel(l_then);
                 {
@@ -1902,6 +2166,22 @@ pub const Codegen = struct {
                 }
                 try self.emit("jmp {s}", .{l_merge});
                 try self.emitLabel(l_merge);
+                self.tern_depth -= 1;
+                if (want.isScalar()) {
+                    // Copy out and release here (dominates the merge): the
+                    // result never reaches scope releases, so ternary values
+                    // nest and live in branches freely.
+                    const t_out = try self.newTemp();
+                    try self.addTemp(t_out, false);
+                    if (want == .f64) {
+                        try self.emit("{s} = fadd {s}, 0.0", .{ t_out, res });
+                    } else {
+                        try self.emit("{s} = add {s}, 0", .{ t_out, res });
+                    }
+                    try self.emit("!{s}", .{res});
+                    if (self.lookup(res)) |rb| rb.owned = false;
+                    return .{ .txt = t_out, .kind = want, .owned = false, .is_temp = true };
+                }
                 return .{ .txt = res, .kind = want, .owned = false, .is_temp = false };
             },
             .call => |c| {

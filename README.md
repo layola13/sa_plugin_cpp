@@ -46,8 +46,14 @@ BACKEND=exe sh tools/sweep.sh    # native backend (needs LLVM-built sa)
 REGEN=1 sh tools/sweep.sh        # refresh committed main.sa files
 ```
 
-Current acceptance: **26/26 pass on both `js` and `exe` backends**,
+Current acceptance: **107/107 pass on both `js` and `exe` backends**
+(26 basic + 77 tsgosa rule-corpus ports + 4 refusal demos),
 plus `zig build test` green (17 tests).
+
+Known backend divergence we pin in lowering (see `demos/tsgosa/PORTING.md`
+and code comments): `i32` shifts wrap to 32 bits on js but stay wide on
+interp/llvm, so every i32 `shl` is emitted with a portable
+`shl-32/ashr-32` wrap sandwich (idempotent on all backends).
 
 ## Compile-time leak check
 

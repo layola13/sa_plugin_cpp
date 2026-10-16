@@ -76,6 +76,7 @@ L_cpp_tere_4:
   jmp L_cpp_term_5
 L_cpp_term_5:
   cpp_t_34 = add cpp_tr_31, 0
+  !cpp_tr_31
   absx = cpp_t_34
   cpp_t_35 = sext absx as i64
   cpp_t_36 = alloc 64
@@ -110,6 +111,5 @@ L_cpp_term_5:
   !cpp_t_8
   !cpp_t_7
   !absx
-  !cpp_tr_31
   !x
   ret 0

@@ -1,0 +1,17 @@
+.{
+    .name = .sa_plugin_cpp,
+    .version = "0.1.0",
+    .fingerprint = 0x1978b0034426fb2d,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "sap.json",
+        "src",
+        "demos",
+        "README.md",
+        "AGENTS.md",
+        "LICENSE",
+    },
+}

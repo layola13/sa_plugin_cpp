@@ -1,0 +1,43 @@
+{
+  "schema": "sa.plugin/1",
+  "name": "cpp",
+  "version": "0.1.0",
+  "source": {
+    "type": "local",
+    "path": "."
+  },
+  "abi": {
+    "plugin": 1,
+    "saasm": ">=0.4.0"
+  },
+  "artifacts": {
+    "linux-x86_64": {
+      "path": "zig-out/lib/libcpp.so"
+    },
+    "windows-x86_64": {
+      "path": "zig-out/bin/cpp.dll"
+    }
+  },
+  "interfaces": {},
+  "skills": ["cpp"],
+  "help": "usage: cpp <command> [options]\n       sa cpp <command> [options]\n\nCommands:\n  init       [path]\n  skills     [--json]\n  check      [file]\n  build      [file] [--out <file.sa>]\n  build-exe  [file] [-o <exe>]  (delegates to host `sa build-exe`)\n  test       [file]            (delegates to host `sa test`)\n\nOptions:\n  --out <file>                            Write the emitted SA text here\n  -o <exe>                                Native output for build-exe\n  --json                                  Emit JSON where supported\n  -h, --help                              Show this help message\n",
+  "permissions": {
+    "fs": [
+      { "op": "read", "path": "$PROJECT/**" },
+      { "op": "write", "path": "$PROJECT/**" },
+      { "op": "create", "path": "$PROJECT/**" }
+    ],
+    "net": [
+      { "url": "http://localhost", "methods": ["GET"] },
+      { "url": "http://127.0.0.1", "methods": ["GET"] }
+    ],
+    "env": ["HOME", "PATH", "SA_*"],
+    "process": {
+      "spawn": true,
+      "exec": [
+        { "path": "/opt/zig/zig", "args": ["*"] }
+      ]
+    }
+  },
+  "dependencies": {}
+}

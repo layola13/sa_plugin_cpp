@@ -829,6 +829,13 @@ pub const Parser = struct {
 
     fn finishType(self: *Parser, base: CType) CompileError!CType {
         var ty = base;
+        // A `<` right after a type name means template arguments, e.g.
+        // `folly::Function<void()>` (folly HazptrDomain.h:49). v0.1 has no
+        // templates, so refuse explicitly instead of falling through to a
+        // cryptic `expected ')'` in the surrounding parameter list.
+        if (self.peek().tag == .lt) {
+            return self.err(self.peek().start, "templates are not supported in v0.1", .{});
+        }
         while (true) {
             if (self.eat(.star) != null) {
                 ty.ptr += 1;
@@ -1915,4 +1922,23 @@ test "parser handles class with method and cout" {
     try p.parseUnit();
     try std.testing.expectEqual(@as(usize, 1), p.structs.items.len);
     try std.testing.expectEqual(@as(usize, 2), p.funcs.items.len);
+}
+
+test "parser refuses template-id in param type with explicit message" {
+    // Regression: folly HazptrDomain.h:49
+    // `void hazptr_inline_executor_add(folly::Function<void()> func);`
+    // used to fail with cryptic `expected ')'`; it must name templates.
+    const gpa = std.testing.allocator;
+    const src = "void f(folly::Function<void()> cb) { return; }\n";
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const agpa = arena.allocator();
+    var lex1 = lex.Lexer.init(src);
+    var diag = Diag.init(agpa);
+    const toks = try lex1.tokenize(agpa, &diag);
+    var p = Parser.create(agpa, src, toks, &diag);
+    defer p.deinit();
+    const r = p.parseUnit();
+    try std.testing.expectError(error.ParseError, r);
+    try std.testing.expect(std.mem.indexOf(u8, diag.msg, "templates are not supported") != null);
 }

@@ -1,0 +1,1 @@
+Boolean || of two bools binds to a bool local read through a ternary (explicit bool/int types added; pure operands so dual evaluation is harmless); tsgosa provenance: tsgosa/demos/1836_bool_logic_or/

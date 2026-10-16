@@ -1,0 +1,1 @@
+Boolean && of a bool flag and a comparison as a for condition (explicit bool/int types added, unused g kept for fidelity; pure operands so dual evaluation is harmless); tsgosa provenance: tsgosa/demos/1841_bool_logic_for/

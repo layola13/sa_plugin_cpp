@@ -1,0 +1,1 @@
+Compound += on a this.* field inside the default ctor (field initializer moved into ctor body since member initializers are unsupported in v0.1; number -> int); tsgosa provenance: tsgosa/demos/1989_wire_compound_lit/

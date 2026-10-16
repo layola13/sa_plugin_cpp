@@ -1,0 +1,68 @@
+@import "sa_std/io/print.sai"
+@import "sa_std/fmt.sai"
+@import "sa_std/string.sai"
+@const str_0 = utf8:"\n"
+@gcd(a: i32, b: i32) -> i32:
+L_cpp_while_0:
+  cpp_t_0 = ne b, 0
+  br cpp_t_0 -> L_cpp_wbody_1, L_cpp_wend_2
+L_cpp_wbody_1:
+  cpp_t_1 = srem a, b
+  t = cpp_t_1
+  !a
+  cpp_t_2 = add b, 0
+  a = cpp_t_2
+  !b
+  cpp_t_3 = add t, 0
+  b = cpp_t_3
+  jmp L_cpp_while_0
+L_cpp_wend_2:
+  cpp_t_4 = add a, 0
+  !b
+  !a
+  ret cpp_t_4
+@main() -> i32:
+  t = 0
+  i = 1
+L_cpp_for_3:
+  cpp_t_5 = sle i, 10
+  br cpp_t_5 -> L_cpp_fbody_4, L_cpp_fend_6
+L_cpp_fbody_4:
+  cpp_t_6 = call @gcd(i, 12)
+  cpp_t_7 = add t, cpp_t_6
+  !cpp_t_6
+  !t
+  t = cpp_t_7
+  jmp L_cpp_fstep_5
+L_cpp_fstep_5:
+  cpp_t_8 = add i, 1
+  cpp_t_9 = add i, 0
+  !i
+  i = cpp_t_8
+  jmp L_cpp_for_3
+L_cpp_fend_6:
+  !i
+  cpp_t_10 = sext t as i64
+  cpp_t_11 = alloc 64
+  cpp_t_12 = alloc 8
+  cpp_t_13 = call @sa_fmt_i64_into(cpp_t_10, 10, cpp_t_11, 64, &cpp_t_12)
+  cpp_t_14 = load cpp_t_12 + 0 as u64
+  cpp_t_15 = alloc 16
+  store cpp_t_15 + 0, cpp_t_11 as ptr
+  store cpp_t_15 + 8, cpp_t_14 as u64
+  cpp_t_16 = load cpp_t_15 + 0 as ptr
+  cpp_t_17 = load cpp_t_15 + 8 as u64
+  call @sa_print_bytes(&cpp_t_16, cpp_t_17)
+  cpp_t_18 = alloc 16
+  store cpp_t_18 + 0, &str_0 as ptr
+  store cpp_t_18 + 8, 1 as u64
+  cpp_t_19 = load cpp_t_18 + 0 as ptr
+  cpp_t_20 = load cpp_t_18 + 8 as u64
+  call @sa_print_bytes(&cpp_t_19, cpp_t_20)
+  !cpp_t_18
+  !cpp_t_15
+  !cpp_t_13
+  !cpp_t_12
+  !cpp_t_11
+  !t
+  ret 0

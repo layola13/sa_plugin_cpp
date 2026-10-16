@@ -1,0 +1,73 @@
+@import "sa_std/io/print.sai"
+@import "sa_std/fmt.sai"
+@import "sa_std/string.sai"
+@const str_0 = utf8:"\n"
+@main() -> i32:
+  a = alloc 32
+  cpp_t_0 = add a, 0
+  store cpp_t_0 + 0, 1 as i32
+  cpp_t_0 = add a, 4
+  store cpp_t_0 + 0, 2 as i32
+  cpp_t_0 = add a, 8
+  store cpp_t_0 + 0, 3 as i32
+  cpp_t_0 = add a, 12
+  store cpp_t_0 + 0, 4 as i32
+  cpp_t_0 = add a, 16
+  store cpp_t_0 + 0, 5 as i32
+  cpp_t_0 = add a, 20
+  store cpp_t_0 + 0, 6 as i32
+  cpp_t_0 = add a, 24
+  store cpp_t_0 + 0, 7 as i32
+  cpp_t_0 = add a, 28
+  store cpp_t_0 + 0, 8 as i32
+  n = 0
+  i = 0
+L_cpp_for_0:
+  cpp_t_1 = slt i, 8
+  br cpp_t_1 -> L_cpp_fbody_1, L_cpp_fend_3
+L_cpp_fbody_1:
+  cpp_t_2 = mul i, 4
+  cpp_t_3 = add a, cpp_t_2
+  cpp_t_4 = load cpp_t_3 + 0 as i32
+  cpp_t_5 = srem cpp_t_4, 2
+  cpp_t_6 = eq cpp_t_5, 0
+  br cpp_t_6 -> L_cpp_then_4, L_cpp_endif_5
+L_cpp_then_4:
+  cpp_t_7 = add n, 1
+  !n
+  n = cpp_t_7
+  jmp L_cpp_endif_5
+L_cpp_endif_5:
+  jmp L_cpp_fstep_2
+L_cpp_fstep_2:
+  cpp_t_8 = add i, 1
+  cpp_t_9 = add i, 0
+  !i
+  i = cpp_t_8
+  jmp L_cpp_for_0
+L_cpp_fend_3:
+  cpp_t_10 = sext n as i64
+  cpp_t_11 = alloc 64
+  cpp_t_12 = alloc 8
+  cpp_t_13 = call @sa_fmt_i64_into(cpp_t_10, 10, cpp_t_11, 64, &cpp_t_12)
+  cpp_t_14 = load cpp_t_12 + 0 as u64
+  cpp_t_15 = alloc 16
+  store cpp_t_15 + 0, cpp_t_11 as ptr
+  store cpp_t_15 + 8, cpp_t_14 as u64
+  cpp_t_16 = load cpp_t_15 + 0 as ptr
+  cpp_t_17 = load cpp_t_15 + 8 as u64
+  call @sa_print_bytes(&cpp_t_16, cpp_t_17)
+  cpp_t_18 = alloc 16
+  store cpp_t_18 + 0, &str_0 as ptr
+  store cpp_t_18 + 8, 1 as u64
+  cpp_t_19 = load cpp_t_18 + 0 as ptr
+  cpp_t_20 = load cpp_t_18 + 8 as u64
+  call @sa_print_bytes(&cpp_t_19, cpp_t_20)
+  !cpp_t_18
+  !cpp_t_15
+  !cpp_t_13
+  !cpp_t_12
+  !cpp_t_11
+  !n
+  !a
+  ret 0

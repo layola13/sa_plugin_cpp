@@ -1,0 +1,49 @@
+@import "sa_std/io/print.sai"
+@import "sa_std/fmt.sai"
+@import "sa_std/string.sai"
+@const str_0 = utf8:"\n"
+@main() -> i32:
+  a = alloc 12
+  cpp_t_0 = add a, 0
+  store cpp_t_0 + 0, 7 as i32
+  cpp_t_0 = add a, 4
+  store cpp_t_0 + 0, 8 as i32
+  cpp_t_0 = add a, 8
+  store cpp_t_0 + 0, 9 as i32
+  f = 1
+  cpp_t_1 = add f, 0
+  fi = cpp_t_1
+  i = 2
+  cpp_t_2 = mul i, 4
+  cpp_t_3 = add a, cpp_t_2
+  cpp_t_4 = load cpp_t_3 + 0 as i32
+  cpp_t_5 = eq fi, cpp_t_4
+  x = cpp_t_5
+  cpp_t_6 = sext x as i64
+  cpp_t_7 = alloc 64
+  cpp_t_8 = alloc 8
+  cpp_t_9 = call @sa_fmt_i64_into(cpp_t_6, 10, cpp_t_7, 64, &cpp_t_8)
+  cpp_t_10 = load cpp_t_8 + 0 as u64
+  cpp_t_11 = alloc 16
+  store cpp_t_11 + 0, cpp_t_7 as ptr
+  store cpp_t_11 + 8, cpp_t_10 as u64
+  cpp_t_12 = load cpp_t_11 + 0 as ptr
+  cpp_t_13 = load cpp_t_11 + 8 as u64
+  call @sa_print_bytes(&cpp_t_12, cpp_t_13)
+  cpp_t_14 = alloc 16
+  store cpp_t_14 + 0, &str_0 as ptr
+  store cpp_t_14 + 8, 1 as u64
+  cpp_t_15 = load cpp_t_14 + 0 as ptr
+  cpp_t_16 = load cpp_t_14 + 8 as u64
+  call @sa_print_bytes(&cpp_t_15, cpp_t_16)
+  !cpp_t_14
+  !cpp_t_11
+  !cpp_t_9
+  !cpp_t_8
+  !cpp_t_7
+  !x
+  !i
+  !fi
+  !f
+  !a
+  ret 0

@@ -1,0 +1,86 @@
+@import "sa_std/io/print.sai"
+@import "sa_std/fmt.sai"
+@import "sa_std/string.sai"
+@const str_0 = utf8:" "
+@const str_1 = utf8:"\n"
+@main() -> i32:
+  r = 1
+  w = 2
+  x = 4
+  cpp_t_0 = or r, w
+  cpp_t_1 = or cpp_t_0, x
+  perm = cpp_t_1
+  cpp_t_2 = and perm, w
+  cpp_t_3 = sext cpp_t_2 as i64
+  cpp_t_4 = alloc 64
+  cpp_t_5 = alloc 8
+  cpp_t_6 = call @sa_fmt_i64_into(cpp_t_3, 10, cpp_t_4, 64, &cpp_t_5)
+  cpp_t_7 = load cpp_t_5 + 0 as u64
+  cpp_t_8 = alloc 16
+  store cpp_t_8 + 0, cpp_t_4 as ptr
+  store cpp_t_8 + 8, cpp_t_7 as u64
+  cpp_t_9 = load cpp_t_8 + 0 as ptr
+  cpp_t_10 = load cpp_t_8 + 8 as u64
+  call @sa_print_bytes(&cpp_t_9, cpp_t_10)
+  cpp_t_11 = alloc 16
+  store cpp_t_11 + 0, &str_0 as ptr
+  store cpp_t_11 + 8, 1 as u64
+  cpp_t_12 = load cpp_t_11 + 0 as ptr
+  cpp_t_13 = load cpp_t_11 + 8 as u64
+  call @sa_print_bytes(&cpp_t_12, cpp_t_13)
+  !cpp_t_11
+  cpp_t_14 = and perm, 8
+  cpp_t_15 = sext cpp_t_14 as i64
+  cpp_t_16 = alloc 64
+  cpp_t_17 = alloc 8
+  cpp_t_18 = call @sa_fmt_i64_into(cpp_t_15, 10, cpp_t_16, 64, &cpp_t_17)
+  cpp_t_19 = load cpp_t_17 + 0 as u64
+  cpp_t_20 = alloc 16
+  store cpp_t_20 + 0, cpp_t_16 as ptr
+  store cpp_t_20 + 8, cpp_t_19 as u64
+  cpp_t_21 = load cpp_t_20 + 0 as ptr
+  cpp_t_22 = load cpp_t_20 + 8 as u64
+  call @sa_print_bytes(&cpp_t_21, cpp_t_22)
+  cpp_t_23 = alloc 16
+  store cpp_t_23 + 0, &str_0 as ptr
+  store cpp_t_23 + 8, 1 as u64
+  cpp_t_24 = load cpp_t_23 + 0 as ptr
+  cpp_t_25 = load cpp_t_23 + 8 as u64
+  call @sa_print_bytes(&cpp_t_24, cpp_t_25)
+  !cpp_t_23
+  cpp_t_26 = xor perm, w
+  cpp_t_27 = sext cpp_t_26 as i64
+  cpp_t_28 = alloc 64
+  cpp_t_29 = alloc 8
+  cpp_t_30 = call @sa_fmt_i64_into(cpp_t_27, 10, cpp_t_28, 64, &cpp_t_29)
+  cpp_t_31 = load cpp_t_29 + 0 as u64
+  cpp_t_32 = alloc 16
+  store cpp_t_32 + 0, cpp_t_28 as ptr
+  store cpp_t_32 + 8, cpp_t_31 as u64
+  cpp_t_33 = load cpp_t_32 + 0 as ptr
+  cpp_t_34 = load cpp_t_32 + 8 as u64
+  call @sa_print_bytes(&cpp_t_33, cpp_t_34)
+  cpp_t_35 = alloc 16
+  store cpp_t_35 + 0, &str_1 as ptr
+  store cpp_t_35 + 8, 1 as u64
+  cpp_t_36 = load cpp_t_35 + 0 as ptr
+  cpp_t_37 = load cpp_t_35 + 8 as u64
+  call @sa_print_bytes(&cpp_t_36, cpp_t_37)
+  !cpp_t_35
+  !cpp_t_32
+  !cpp_t_30
+  !cpp_t_29
+  !cpp_t_28
+  !cpp_t_20
+  !cpp_t_18
+  !cpp_t_17
+  !cpp_t_16
+  !cpp_t_8
+  !cpp_t_6
+  !cpp_t_5
+  !cpp_t_4
+  !perm
+  !x
+  !w
+  !r
+  ret 0

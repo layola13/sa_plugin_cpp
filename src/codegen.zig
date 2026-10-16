@@ -1050,12 +1050,15 @@ pub const Codegen = struct {
 
     fn genDoWhile(self: *Codegen, body: []par.Sid, cond: par.Eid) CompileError!void {
         const l_body = try self.newLabel("do");
+        const l_cont = try self.newLabel("dcont");
         const l_end = try self.newLabel("dend");
         try self.emitLabel(l_body);
-        try self.loops.append(.{ .cont_label = l_body, .break_label = l_end, .depth = self.depth });
+        try self.loops.append(.{ .cont_label = l_cont, .break_label = l_end, .depth = self.depth });
         try self.genBlock(body);
         _ = self.loops.pop();
         if (!self.terminated) {
+            // `continue` lands here so the condition is re-evaluated.
+            try self.emitLabel(l_cont);
             if (try self.constFoldCond(cond)) |taken| {
                 if (taken) try self.emit("jmp {s}", .{l_body});
             } else {
@@ -1216,10 +1219,15 @@ pub const Codegen = struct {
             const l_case = try std.fmt.allocPrint(self.gpa, "L_cpp_case_{d}_{d}", .{ case_base, i });
             if (c.value) |ve| {
                 const ce = self.p.exprs.items[ve];
-                if (ce.kind != .int_lit) {
-                    return self.err(ce.off, "case labels must be integer constants in v0.1", .{});
-                }
-                const lit = try self.normIntLit(ce.kind.int_lit, ce.off);
+                const lit = blk: {
+                    if (ce.kind == .int_lit) break :blk try self.normIntLit(ce.kind.int_lit, ce.off);
+                    // Constant expressions (`case 1+2:`) fold here;
+                    // named constants stay unsupported (use enums).
+                    if (try self.constFold(ve)) |cv| {
+                        if (cv == .i) break :blk try std.fmt.allocPrint(self.gpa, "{d}", .{cv.i});
+                    }
+                    return self.err(ce.off, "case labels must be integer constants in v0.1 (named consts: use enums)", .{});
+                };
                 const t = try self.newTemp();
                 try self.addTemp(t, false);
                 try self.emit("{s} = eq {s}, {s}", .{ t, sw, lit });

@@ -7,9 +7,10 @@
 L_cpp_do_0:
   !t
   t = 1
+L_cpp_dcont_1:
   cpp_t_0 = sgt t, 50
-  br cpp_t_0 -> L_cpp_do_0, L_cpp_dend_1
-L_cpp_dend_1:
+  br cpp_t_0 -> L_cpp_do_0, L_cpp_dend_2
+L_cpp_dend_2:
   cpp_t_1 = sext t as i64
   cpp_t_2 = alloc 64
   cpp_t_3 = alloc 8

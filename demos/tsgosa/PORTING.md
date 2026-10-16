@@ -13,7 +13,7 @@ Porting rules (fidelity first):
 - Anything needing out-of-subset features is SKIPPED with a reason, never
   adapted into a different rule.
 
-## Wave 1 (done): 77 ported, 5 skipped, 4 refusal-ports
+## Wave 1 (done): 77 ported, 5 skipped, 4 refusal demos
 
 Acceptance: 26 basic + 77 tsgosa + 4 neg = 107/107 on js AND exe
 backends, plus 17/17 unit tests. Committed `main.sa` files are
@@ -66,3 +66,30 @@ Everything else under tsgosa/demos not listed above: triage by `main.ts`
 content (many numeric/loop ports remain, e.g. the 12xx–18xx arith/loop
 families and the 2xxx suites). Negative (`expect.refused`) ports map to
 our explicit subset errors; see `demos/tsgosa-neg/` (planned).
+
+## Wave 2 (done): +148 ported (1xx/6xx/14xx-15xx/18xx-19xx/20xx-21xx/7xx-9xx)
+
+- 1xx numeric/loop core (30): 106_flags, 118_prefix, 134_gcd_loop,
+  135_pow_loop, 137_tri, 141_sum_sq, 142_dot, 146_mode, 148_bit_count,
+  152_enum_calc, 153_ternary_chain, 155_collatz, 158_do_sum,
+  159_gcd_sum, 164_num_sep, 169_neg_idx, 173_fib_loop, 174_count_even,
+  175_min3, 179_div_mod, 180_leap, 181_gcd_all, 183_prime_upto,
+  187_binary, 188_select, 189_nest_if3, 191_fizz20, 195_swap,
+  197_and_or, 198_while_sum2 (+889_do_continue, ported post-fix below)
+- 6xx top_* rules (16, whole 600-699 range triaged)
+- 14xx-15xx (30): switch fallthrough, class statics via ::, enums,
+  calls in conditions, POD structs
+- 18xx-19xx (11, range fully triaged): bool-logic matrices,
+  default-ctor wiring
+- 20xx-21xx (30): bool equality mixes, bool call results, array
+  params, swap idioms
+- 7xx-9xx (30): for..of/break/continue loops, switch variants,
+  top-level const/object/array/global entry rephrases, math-as-ternary
+
+Wave-2 porting surfaced two compiler bugs, both fixed and
+regression-covered here:
+- do-while `continue` skipped the condition (now jumps to a cond label);
+- nested ternary left its inner result binding leaking out of scope
+  (scalar results now copy out and release at their own merge).
+- Bonus: ternary/switch/if conditions now constant-fold (incl. i32
+  wraparound), so literal conditions and `case 1+2:` work.

@@ -1,0 +1,20 @@
+@import "sa_std/io/print.sai"
+@import "sa_std/string.sai"
+@const str_0 = utf8:"hello world"
+@const str_1 = utf8:"\n"
+@main() -> i32:
+  cpp_t_0 = alloc 16
+  store cpp_t_0 + 0, &str_0 as ptr
+  store cpp_t_0 + 8, 11 as u64
+  cpp_t_1 = load cpp_t_0 + 0 as ptr
+  cpp_t_2 = load cpp_t_0 + 8 as u64
+  call @sa_print_bytes(&cpp_t_1, cpp_t_2)
+  !cpp_t_0
+  cpp_t_3 = alloc 16
+  store cpp_t_3 + 0, &str_1 as ptr
+  store cpp_t_3 + 8, 1 as u64
+  cpp_t_4 = load cpp_t_3 + 0 as ptr
+  cpp_t_5 = load cpp_t_3 + 8 as u64
+  call @sa_print_bytes(&cpp_t_4, cpp_t_5)
+  !cpp_t_3
+  ret 0

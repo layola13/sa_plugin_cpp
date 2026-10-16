@@ -212,6 +212,10 @@ pub const Codegen = struct {
             return .{ .kind = .none };
         }
         if (ty.ptr > 0) {
+            // `char*` / `const char*` are fat string slices in v0.1 lowering.
+            if (ty.ptr == 1 and ty.prim == .char8) {
+                return .{ .kind = .slice };
+            }
             // Pointer: record pointee for deref/index.
             var elem_kind: VKind = .i32;
             var elem_sid: ?usize = null;
@@ -241,10 +245,20 @@ pub const Codegen = struct {
             .boolean => return .{ .kind = .boolean },
             .char8 => return .{ .kind = .i32 },
             .named => {
-                const si = self.findStruct(ty.name) orelse {
-                    return self.err(off, "unknown type '{s}'", .{ty.name});
-                };
-                return .{ .kind = .ptr, .sid = si };
+                if (self.findStruct(ty.name)) |si| {
+                    return .{ .kind = .ptr, .sid = si };
+                }
+                // Enum types lower to plain i32.
+                for (self.p.enums.items) |e| {
+                    if (std.mem.eql(u8, e.name, ty.name)) return .{ .kind = .i32 };
+                    const q = std.fmt.allocPrint(self.gpa, "{s}{s}", .{ e.qual, e.name }) catch continue;
+                    defer self.gpa.free(q);
+                    if (std.mem.eql(u8, q, ty.name)) {
+                        // Owned by the arena in real pipelines; freed at return.
+                        return .{ .kind = .i32 };
+                    }
+                }
+                return self.err(off, "unknown type '{s}'", .{ty.name});
             },
             else => return self.err(off, "unsupported type", .{}),
         }
@@ -315,7 +329,11 @@ pub const Codegen = struct {
                 break :blk rt.kind;
             };
             var sid: ?usize = null;
-            if (f.is_method and !f.is_static) {
+            if (f.is_ctor or f.is_dtor) {
+                // Ctors/dtors carry the class in their name ("Box_ctor").
+                const base = if (std.mem.endsWith(u8, f.name, "_ctor")) f.name[0 .. f.name.len - 5] else if (std.mem.endsWith(u8, f.name, "_dtor")) f.name[0 .. f.name.len - 5] else f.name;
+                sid = self.findStruct(base);
+            } else if (f.is_method and !f.is_static) {
                 // `this` struct: qual is like "Point_" or "N_Point_".
                 const q = f.qual;
                 const stripped = if (std.mem.endsWith(u8, q, "_")) q[0 .. q.len - 1] else q;
@@ -606,6 +624,15 @@ pub const Codegen = struct {
         }
     }
 
+    /// Zero-fill every field of a freshly allocated struct (v0.1 default
+    /// construction semantics when no user constructor exists).
+    fn zeroFillStruct(self: *Codegen, base: []const u8, layout: Layout) CompileError!void {
+        for (layout.fields, 0..) |fld, k| {
+            const zero: []const u8 = if (fld.kind == .f64) "0.0" else "0";
+            try self.emit("store {s} + {d}, {s} as {s}", .{ base, layout.offsets[k], zero, fld.kind.saName() });
+        }
+    }
+
     fn constArrayLen(self: *Codegen, e: par.Eid, off: usize) CompileError!usize {
         _ = off;
         const ex = self.p.exprs.items[e];
@@ -664,7 +691,7 @@ pub const Codegen = struct {
             if (!has_init) return self.err(off, "'auto' needs an initializer", .{});
             const v = try self.genExpr(init_e);
             if (v.kind == .none) return self.err(off, "cannot declare 'auto' void", .{});
-            try self.bindName(name, v, .{ .kind = v.kind, .sid = v.sid }, off);
+            try self.bindDecl(name, v, .{ .kind = v.kind, .sid = v.sid }, off);
             return;
         }
         const rt = try self.resolveType(ty, off);
@@ -697,6 +724,8 @@ pub const Codegen = struct {
                 defer self.gpa.free(ctor_name);
                 if (self.findFunc(ctor_name)) |_| {
                     try self.emit("call @{s}({s})", .{ ctor_name, name });
+                } else {
+                    try self.zeroFillStruct(name, layout);
                 }
             }
             return;
@@ -712,34 +741,17 @@ pub const Codegen = struct {
             return;
         }
         const v = try self.genExpr(init_e);
-        try self.bindName(name, v, rt, off);
+        try self.bindDecl(name, v, rt, off);
     }
 
-    fn bindName(self: *Codegen, name: []const u8, v: Val, rt: RType, off: usize) CompileError!void {
+    /// Declare a fresh binding (shadows outer depths; same-depth duplicates
+    /// are rejected by the caller via checkUserName/scope rules).
+    fn bindDecl(self: *Codegen, name: []const u8, v: Val, rt: RType, off: usize) CompileError!void {
         const cv = try self.conv(v, rt.kind, off);
-        if (!cv.is_temp and std.mem.eql(u8, cv.txt, name)) {
-            // Self-assign: only refresh the recorded type.
-            if (self.lookup(name)) |b| {
-                b.kind = rt.kind;
-                b.sid = rt.sid;
-            }
-            return;
-        }
-        if (self.lookup(name)) |b| {
-            if (b.owned) try self.emit("!{s}", .{name});
-            b.kind = rt.kind;
-            b.sid = rt.sid;
-            b.elem_kind = rt.elem_kind;
-            b.elem_sid = rt.elem_sid;
-            b.arr_len = null;
-            b.owned = true;
-            try self.storeToName(name, cv, rt.kind);
-        } else {
-            const b = try self.addBinding(name, rt.kind, rt.sid, true);
-            b.elem_kind = rt.elem_kind;
-            b.elem_sid = rt.elem_sid;
-            try self.storeToName(name, cv, rt.kind);
-        }
+        const b = try self.addBinding(name, rt.kind, rt.sid, true);
+        b.elem_kind = rt.elem_kind;
+        b.elem_sid = rt.elem_sid;
+        try self.storeToName(name, cv, rt.kind);
     }
 
     /// Emit `name = <value>` with copy-vs-move discipline:
@@ -772,28 +784,22 @@ pub const Codegen = struct {
         }
     }
 
-    /// Evaluate a condition into a hidden owned i32 local; br on it.
-    fn materializeCond(self: *Codegen, e: par.Eid) CompileError![]const u8 {
+    /// Evaluate a condition to a value used directly by `br`.
+    /// No hidden binding is created: transient temps die silently, owned
+    /// temps stay live until the single post-merge scope-end release, and
+    /// names are borrowed. This keeps both sides of a merge in agreement.
+    fn condVal(self: *Codegen, e: par.Eid) CompileError!Val {
         const c = try self.genExpr(e);
-        const cc = try self.conv(c, .i32, self.p.exprs.items[e].off);
-        const h = try self.newHidden("c");
-        try self.emit("{s} = {s}", .{ h, cc.txt });
-        if (cc.is_temp and cc.owned) {
-            for (self.temps.items) |*t| {
-                if (t.live and std.mem.eql(u8, t.name, cc.txt)) t.live = false;
-            }
-        }
-        _ = try self.addBinding(h, .i32, null, true);
-        return h;
+        return self.conv(c, .i32, self.p.exprs.items[e].off);
     }
 
     fn genIf(self: *Codegen, _: usize, cond: par.Eid, then_body: []par.Sid, else_body: []par.Sid, has_else: bool) CompileError!void {
-        const c = try self.materializeCond(cond);
+        const cv = try self.condVal(cond);
         const l_then = try self.newLabel("then");
         const l_merge = try self.newLabel("endif");
         if (has_else) {
             const l_else = try self.newLabel("else");
-            try self.emit("br {s} -> {s}, {s}", .{ c, l_then, l_else });
+            try self.emit("br {s} -> {s}, {s}", .{ cv.txt, l_then, l_else });
             try self.emitLabel(l_then);
             try self.genBlock(then_body);
             if (!self.terminated) try self.emit("jmp {s}", .{l_merge});
@@ -804,7 +810,7 @@ pub const Codegen = struct {
             self.terminated = false;
             try self.emitLabel(l_merge);
         } else {
-            try self.emit("br {s} -> {s}, {s}", .{ c, l_then, l_merge });
+            try self.emit("br {s} -> {s}, {s}", .{ cv.txt, l_then, l_merge });
             try self.emitLabel(l_then);
             try self.genBlock(then_body);
             if (!self.terminated) try self.emit("jmp {s}", .{l_merge});
@@ -818,8 +824,8 @@ pub const Codegen = struct {
         const l_body = try self.newLabel("wbody");
         const l_end = try self.newLabel("wend");
         try self.emitLabel(l_top);
-        const c = try self.materializeCond(cond);
-        try self.emit("br {s} -> {s}, {s}", .{ c, l_body, l_end });
+        const cv = try self.condVal(cond);
+        try self.emit("br {s} -> {s}, {s}", .{ cv.txt, l_body, l_end });
         try self.emitLabel(l_body);
         try self.loops.append(.{ .cont_label = l_top, .break_label = l_end, .depth = self.depth });
         try self.genBlock(body);
@@ -837,8 +843,8 @@ pub const Codegen = struct {
         try self.genBlock(body);
         _ = self.loops.pop();
         if (!self.terminated) {
-            const c = try self.materializeCond(cond);
-            try self.emit("br {s} -> {s}, {s}", .{ c, l_body, l_end });
+            const cv = try self.condVal(cond);
+            try self.emit("br {s} -> {s}, {s}", .{ cv.txt, l_body, l_end });
         }
         self.terminated = false;
         try self.emitLabel(l_end);
@@ -857,8 +863,8 @@ pub const Codegen = struct {
         const l_end = try self.newLabel("fend");
         try self.emitLabel(l_top);
         if (has_cond) {
-            const c = try self.materializeCond(cond);
-            try self.emit("br {s} -> {s}, {s}", .{ c, l_body, l_end });
+            const cv = try self.condVal(cond);
+            try self.emit("br {s} -> {s}, {s}", .{ cv.txt, l_body, l_end });
         } else {
             try self.emit("jmp {s}", .{l_body});
         }
@@ -1222,14 +1228,12 @@ pub const Codegen = struct {
             .local => |bi| {
                 const b = &self.bindings.items[bi];
                 const cv = try self.conv(v, b.kind, off);
-                if (b.owned) try self.emit("!{s}", .{b.name});
+                if (!cv.is_temp and std.mem.eql(u8, cv.txt, b.name)) return;
+                // Always release the old value: locals own theirs, and
+                // parameters are callee-owned on first write.
+                try self.emit("!{s}", .{b.name});
                 b.owned = true;
-                try self.emit("{s} = {s}", .{ b.name, cv.txt });
-                if (cv.is_temp and cv.owned) {
-                    for (self.temps.items) |*t| {
-                        if (t.live and std.mem.eql(u8, t.name, cv.txt)) t.live = false;
-                    }
-                }
+                try self.storeToName(b.name, cv, b.kind);
             },
             .field => |f| {
                 const cv = try self.conv(v, f.kind, off);
@@ -1361,6 +1365,8 @@ pub const Codegen = struct {
             .bit_and => "and",
             .bit_or => "or",
             .bit_xor => "xor",
+            .log_and => "and",
+            .log_or => "or",
             else => "add",
         };
         try self.emit("{s} = {s} {s}, {s}", .{ dst, o, ltxt, rtxt });
@@ -1493,6 +1499,204 @@ pub const Codegen = struct {
         }
     }
 
+    fn unifyKinds(_: *Codegen, a: VKind, b: VKind, _: usize) CompileError!VKind {
+        if (a == b) return a;
+        if ((a == .i32 and b == .i64) or (a == .i64 and b == .i32)) return .i64;
+        if (a == .boolean and b.isInt()) return b;
+        if (b == .boolean and a.isInt()) return a;
+        if (a == .f64 and b.isInt()) return .f64;
+        if (b == .f64 and a.isInt()) return .f64;
+        if ((a == .ptr or a == .slice) and (b == .ptr or b == .slice)) return .ptr;
+        return error.CodegenError;
+    }
+
+    fn normalizeCallName(self: *Codegen, raw: []const u8) CompileError![]const u8 {
+        if (std.mem.indexOf(u8, raw, "::") == null) return raw;
+        const buf = try self.gpa.dupe(u8, raw);
+        for (buf) |*ch| {
+            if (ch.* == ':') ch.* = '_';
+        }
+        var w: usize = 0;
+        var i: usize = 0;
+        while (i < buf.len) {
+            if (buf[i] == '_' and i + 1 < buf.len and buf[i + 1] == '_') {
+                buf[w] = '_';
+                w += 1;
+                i += 2;
+            } else {
+                buf[w] = buf[i];
+                w += 1;
+                i += 1;
+            }
+        }
+        return buf[0..w];
+    }
+
+    fn typeofLValue(self: *Codegen, e: par.Eid) CompileError!VKind {
+        const ex = self.p.exprs.items[e];
+        switch (ex.kind) {
+            .ident => |n| {
+                if (self.lookup(n)) |b| return b.kind;
+                if (self.cur_sid) |si| {
+                    if (self.lookup("this") != null) {
+                        const layout = self.layouts.items[si];
+                        for (layout.fields) |fld| {
+                            if (std.mem.eql(u8, fld.name, n)) return fld.kind;
+                        }
+                    }
+                }
+                return self.err(ex.off, "unknown variable '{s}'", .{n});
+            },
+            .field => |f| {
+                const b = try self.baseBinding(f.base, ex.off);
+                const layout = self.layouts.items[b.sid.?];
+                for (layout.fields) |fld| {
+                    if (std.mem.eql(u8, fld.name, f.name)) return fld.kind;
+                }
+                return self.err(ex.off, "struct has no field '{s}'", .{f.name});
+            },
+            .index => |ix| return self.indexElemKind(ix.base, ex.off),
+            .unary => |u| {
+                if (u.op != .deref) return self.err(ex.off, "not assignable", .{});
+                return .i32;
+            },
+            else => return self.err(ex.off, "not assignable", .{}),
+        }
+    }
+
+    /// Static result kind of an expression (no code emitted).
+    fn typeofExpr(self: *Codegen, e: par.Eid) CompileError!VKind {
+        const ex = self.p.exprs.items[e];
+        switch (ex.kind) {
+            .int_lit => return .i32,
+            .float_lit => return .f64,
+            .str_lit => return .slice,
+            .char_lit => return .i32,
+            .bool_lit => return .boolean,
+            .null_lit => return .ptr,
+            .ident => |n| {
+                if (self.lookup(n)) |b| return b.kind;
+                if (self.cur_sid) |si| {
+                    if (self.lookup("this") != null) {
+                        const layout = self.layouts.items[si];
+                        for (layout.fields) |fld| {
+                            if (std.mem.eql(u8, fld.name, n)) return fld.kind;
+                        }
+                    }
+                }
+                return self.err(ex.off, "unknown variable '{s}'", .{n});
+            },
+            .this_ => return .ptr,
+            .unary => |u| switch (u.op) {
+                .not => return .boolean,
+                .addrof => return .ptr,
+                .deref => return .i32,
+                .pre_inc, .pre_dec, .post_inc, .post_dec => return self.typeofExpr(u.x),
+                .neg => {
+                    const k = try self.typeofExpr(u.x);
+                    if (k == .f64 or k.isInt()) return k;
+                    return self.err(ex.off, "cannot negate this value (need a number)", .{});
+                },
+                .bnot => {
+                    const k = try self.typeofExpr(u.x);
+                    if (k.isInt()) return k;
+                    return self.err(ex.off, "cannot bits-flip this value (need an integer)", .{});
+                },
+            },
+            .binary => |b| {
+                if (b.op == .assign or isAssignOpLocal(b.op)) {
+                    return self.typeofLValue(b.l);
+                }
+                const lk = try self.typeofExpr(b.l);
+                const rk = try self.typeofExpr(b.r);
+                if (b.op == .lt or b.op == .le or b.op == .gt or b.op == .ge or b.op == .eq or b.op == .ne or b.op == .log_and or b.op == .log_or) {
+                    return .boolean;
+                }
+                if (lk == .f64 or rk == .f64) return .f64;
+                if (lk == .i64 or rk == .i64) return .i64;
+                return lk;
+            },
+            .ternary => |tr| {
+                const tk = try self.typeofExpr(tr.t);
+                const fk = try self.typeofExpr(tr.f);
+                if (tk == .none and fk == .none) return .none;
+                if (tk == .none or fk == .none) {
+                    return self.err(ex.off, "ternary arms have mismatched types in v0.1", .{});
+                }
+                return self.unifyKinds(tk, fk, ex.off) catch {
+                    return self.err(ex.off, "ternary arms have mismatched types in v0.1", .{});
+                };
+            },
+            .call => |c| {
+                const ce = self.p.exprs.items[c.callee];
+                if (ce.kind != .ident) {
+                    return self.err(ce.off, "indirect calls are not supported in v0.1", .{});
+                }
+                const nm = try self.normalizeCallName(ce.kind.ident);
+                defer if (nm.ptr != ce.kind.ident.ptr) self.gpa.free(nm);
+                const ref = self.findFunc(nm) orelse {
+                    return self.err(ce.off, "unknown function '{s}'", .{ce.kind.ident});
+                };
+                if (ref.is_method and !ref.is_static) {
+                    return self.err(ce.off, "method '{s}' needs an object (write obj.{s}(...))", .{ nm, ce.kind.ident });
+                }
+                return ref.ret_kind;
+            },
+            .method_call => |m| {
+                const ref = try self.methodFuncRef(m.obj, m.name, ex.off);
+                return ref.ret_kind;
+            },
+            .index => |ix| return self.indexElemKind(ix.base, ex.off),
+            .field => |f| {
+                const b = try self.baseBinding(f.base, ex.off);
+                const layout = self.layouts.items[b.sid.?];
+                for (layout.fields) |fld| {
+                    if (std.mem.eql(u8, fld.name, f.name)) return fld.kind;
+                }
+                return self.err(ex.off, "struct has no field '{s}'", .{f.name});
+            },
+            .new_ => return .ptr,
+            .delete_ => return .i32,
+            .sizeof_ty => return .i32,
+            .cast => |c| {
+                const rt = try self.resolveType(c.ty, ex.off);
+                if (rt.kind == .none) return .none;
+                return rt.kind;
+            },
+            .cout_chain => return .i32,
+            .endl => return self.err(ex.off, "'endl' outside a cout chain", .{}),
+            .init_list => return self.err(ex.off, "brace lists only appear in declarations in v0.1", .{}),
+        }
+    }
+
+    /// Resolve a method callee to its FuncRef (shared by genMethodCall/typeof).
+    fn methodFuncRef(self: *Codegen, obj: par.Eid, name: []const u8, off: usize) CompileError!*FuncRef {
+        const oe = self.p.exprs.items[obj];
+        var sid: ?usize = null;
+        if (oe.kind == .ident) {
+            const b = self.lookup(oe.kind.ident) orelse {
+                return self.err(oe.off, "unknown variable '{s}'", .{oe.kind.ident});
+            };
+            if (b.kind != .ptr or b.sid == null) {
+                return self.err(oe.off, "method call needs a struct object", .{});
+            }
+            sid = b.sid;
+        } else if (oe.kind == .this_) {
+            _ = self.lookup("this") orelse {
+                return self.err(oe.off, "'this' outside a method", .{});
+            };
+            sid = self.cur_sid;
+        } else {
+            return self.err(oe.off, "method call needs a named object in v0.1", .{});
+        }
+        const sdef = self.p.structs.items[sid.?];
+        const full = try std.fmt.allocPrint(self.gpa, "{s}{s}_{s}", .{ sdef.qual, sdef.name, name });
+        defer self.gpa.free(full);
+        return self.findFunc(full) orelse {
+            return self.err(off, "struct '{s}' has no method '{s}'", .{ sdef.name, name });
+        };
+    }
+
     fn genExpr(self: *Codegen, e: par.Eid) CompileError!Val {
         const ex = self.p.exprs.items[e];
         switch (ex.kind) {
@@ -1622,6 +1826,17 @@ pub const Codegen = struct {
                 }
                 const l = try self.genExpr(b.l);
                 const r = try self.genExpr(b.r);
+                if (b.op == .log_and or b.op == .log_or) {
+                    // Logical ops need 0/1 operands: convert truthiness first.
+                    const lb = try self.conv(l, .boolean, self.p.exprs.items[b.l].off);
+                    const rb = try self.conv(r, .boolean, self.p.exprs.items[b.r].off);
+                    const t = try self.newTemp();
+                    try self.addTemp(t, false);
+                    try self.emitBin(t, b.op, lb.txt, .boolean, rb.txt, .boolean, ex.off);
+                    try self.killVal(lb);
+                    try self.killVal(rb);
+                    return .{ .txt = t, .kind = .boolean, .owned = false, .is_temp = true };
+                }
                 // Usual arithmetic conversions: f64 wins, else i64 wins.
                 var want = l.kind;
                 if (r.kind == .f64 or l.kind == .f64) want = .f64 else if (r.kind == .i64 or l.kind == .i64) want = .i64;
@@ -1637,56 +1852,54 @@ pub const Codegen = struct {
                 return .{ .txt = t, .kind = rk, .owned = false, .is_temp = true };
             },
             .ternary => |tr| {
-                const ch = try self.materializeCond(tr.c);
+                const tk = try self.typeofExpr(tr.t);
+                const fk = try self.typeofExpr(tr.f);
+                const chv = try self.condVal(tr.c);
                 const l_then = try self.newLabel("tern");
                 const l_else = try self.newLabel("tere");
                 const l_merge = try self.newLabel("term");
-                const tv0 = try self.genExpr(tr.t);
-                // Result kind: prefer non-int-literal side; ints unify.
-                var want = tv0.kind;
-                const fv0 = try self.genExpr(tr.f);
-                if (want == .none and fv0.kind == .none) {
-                    // Both arms void (e.g. `c ? f() : g();` as a statement).
-                    const l_then0 = try self.newLabel("tern");
-                    const l_else0 = try self.newLabel("tere");
-                    const l_merge0 = try self.newLabel("term");
-                    try self.emit("br {s} -> {s}, {s}", .{ ch, l_then0, l_else0 });
-                    try self.emitLabel(l_then0);
+                if (tk == .none and fk == .none) {
+                    // Both arms void: evaluate each inside its branch.
+                    try self.emit("br {s} -> {s}, {s}", .{ chv.txt, l_then, l_else });
+                    try self.emitLabel(l_then);
+                    const tv0 = try self.genExpr(tr.t);
                     try self.killVal(tv0);
-                    try self.emit("jmp {s}", .{l_merge0});
-                    try self.emitLabel(l_else0);
+                    try self.emit("jmp {s}", .{l_merge});
+                    try self.emitLabel(l_else);
+                    const fv0 = try self.genExpr(tr.f);
                     try self.killVal(fv0);
-                    try self.emit("jmp {s}", .{l_merge0});
-                    try self.emitLabel(l_merge0);
+                    try self.emit("jmp {s}", .{l_merge});
+                    try self.emitLabel(l_merge);
                     return .{ .txt = "0", .kind = .i32, .owned = false, .is_temp = false };
                 }
-                if (want == .none or fv0.kind == .none) {
+                if (tk == .none or fk == .none) {
                     return self.err(ex.off, "ternary arms have mismatched types in v0.1", .{});
                 }
-                if (want == .i32 and fv0.kind == .i64) want = .i64;
-                if (want == .i64 and fv0.kind == .i32) want = .i64;
-                if (want == .boolean and fv0.kind.isInt()) want = fv0.kind;
-                if (fv0.kind == .boolean and want.isInt()) {} else if (want != fv0.kind and !(want.isInt() and fv0.kind.isInt()) and !(want == .f64 and fv0.kind.isInt()) and !(fv0.kind == .f64 and want.isInt())) {
-                    if (!((want == .ptr or want == .slice) and (fv0.kind == .ptr or fv0.kind == .slice))) {
-                        return self.err(ex.off, "ternary arms have mismatched types in v0.1", .{});
-                    }
-                    want = .ptr;
-                }
-                if (want == .f64 or (want.isInt() and (tv0.kind.isInt() or fv0.kind.isInt()))) {} else if (want != .ptr and want != .slice) {
+                const want = self.unifyKinds(tk, fk, ex.off) catch {
+                    return self.err(ex.off, "ternary arms have mismatched types in v0.1", .{});
+                };
+                if (want != .ptr and want != .slice and !want.isScalar()) {
                     return self.err(ex.off, "ternary supports scalars and pointers in v0.1", .{});
                 }
                 const res = try self.newHidden("tr");
                 const zero: []const u8 = if (want == .f64) "0.0" else "0";
                 try self.emit("{s} = {s}", .{ res, zero });
                 _ = try self.addBinding(res, want, null, true);
-                try self.emit("br {s} -> {s}, {s}", .{ ch, l_then, l_else });
+                const res_idx = self.bindings.items.len - 1;
+                try self.emit("br {s} -> {s}, {s}", .{ chv.txt, l_then, l_else });
                 try self.emitLabel(l_then);
-                const tv = try self.conv(tv0, want, self.p.exprs.items[tr.t].off);
-                try self.assignTo(.{ .local = self.bindings.items.len - 1 }, tv, ex.off);
+                {
+                    const tv0 = try self.genExpr(tr.t);
+                    const tv = try self.conv(tv0, want, self.p.exprs.items[tr.t].off);
+                    try self.assignTo(.{ .local = res_idx }, tv, ex.off);
+                }
                 try self.emit("jmp {s}", .{l_merge});
                 try self.emitLabel(l_else);
-                const fv = try self.conv(fv0, want, self.p.exprs.items[tr.f].off);
-                try self.assignTo(.{ .local = self.bindings.items.len - 1 }, fv, ex.off);
+                {
+                    const fv0 = try self.genExpr(tr.f);
+                    const fv = try self.conv(fv0, want, self.p.exprs.items[tr.f].off);
+                    try self.assignTo(.{ .local = res_idx }, fv, ex.off);
+                }
                 try self.emit("jmp {s}", .{l_merge});
                 try self.emitLabel(l_merge);
                 return .{ .txt = res, .kind = want, .owned = false, .is_temp = false };
@@ -1734,6 +1947,14 @@ pub const Codegen = struct {
                     const t = try self.newTemp();
                     try self.addTemp(t, true);
                     try self.emit("{s} = alloc {d}", .{ t, layout.size });
+                    const sdef = self.p.structs.items[rt.sid.?];
+                    const ctor_name = std.fmt.allocPrint(self.gpa, "{s}{s}_ctor", .{ sdef.qual, sdef.name }) catch return error.CodegenError;
+                    defer self.gpa.free(ctor_name);
+                    if (self.findFunc(ctor_name)) |_| {
+                        try self.emit("call @{s}({s})", .{ ctor_name, t });
+                    } else {
+                        try self.zeroFillStruct(t, layout);
+                    }
                     return .{ .txt = t, .kind = .ptr, .owned = true, .is_temp = true, .sid = rt.sid };
                 }
                 if (!rt.kind.isScalar() and rt.kind != .ptr) {

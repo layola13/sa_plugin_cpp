@@ -1,0 +1,33 @@
+@import "sa_std/io/print.sai"
+@import "sa_std/fmt.sai"
+@import "sa_std/string.sai"
+@const str_0 = utf8:"\n"
+@math_square(x: i32) -> i32:
+  cpp_t_0 = mul x, x
+  ret cpp_t_0
+@main() -> i32:
+  cpp_t_1 = call @math_square(9)
+  cpp_t_2 = sext cpp_t_1 as i64
+  cpp_t_3 = alloc 64
+  cpp_t_4 = alloc 8
+  cpp_t_5 = call @sa_fmt_i64_into(cpp_t_2, 10, cpp_t_3, 64, &cpp_t_4)
+  cpp_t_6 = load cpp_t_4 + 0 as u64
+  cpp_t_7 = alloc 16
+  store cpp_t_7 + 0, cpp_t_3 as ptr
+  store cpp_t_7 + 8, cpp_t_6 as u64
+  cpp_t_8 = load cpp_t_7 + 0 as ptr
+  cpp_t_9 = load cpp_t_7 + 8 as u64
+  call @sa_print_bytes(&cpp_t_8, cpp_t_9)
+  !cpp_t_1
+  cpp_t_10 = alloc 16
+  store cpp_t_10 + 0, &str_0 as ptr
+  store cpp_t_10 + 8, 1 as u64
+  cpp_t_11 = load cpp_t_10 + 0 as ptr
+  cpp_t_12 = load cpp_t_10 + 8 as u64
+  call @sa_print_bytes(&cpp_t_11, cpp_t_12)
+  !cpp_t_10
+  !cpp_t_7
+  !cpp_t_5
+  !cpp_t_4
+  !cpp_t_3
+  ret 0

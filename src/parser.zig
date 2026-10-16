@@ -159,6 +159,11 @@ pub const EnumConst = struct {
     value: i64,
 };
 
+pub const EnumDef = struct {
+    name: []const u8,
+    qual: []const u8,
+};
+
 // ---------------------------------------------------------------------------
 // Parser
 // ---------------------------------------------------------------------------
@@ -174,6 +179,7 @@ pub const Parser = struct {
     funcs: std.array_list.Managed(Func),
     structs: std.array_list.Managed(StructDef),
     aliases: std.array_list.Managed(Alias),
+    enums: std.array_list.Managed(EnumDef),
     enum_consts: std.array_list.Managed(EnumConst),
     ns_stack: std.array_list.Managed([]const u8),
 
@@ -188,6 +194,7 @@ pub const Parser = struct {
             .funcs = .init(gpa),
             .structs = .init(gpa),
             .aliases = .init(gpa),
+            .enums = .init(gpa),
             .enum_consts = .init(gpa),
             .ns_stack = .init(gpa),
         };
@@ -199,6 +206,7 @@ pub const Parser = struct {
         self.funcs.deinit();
         self.structs.deinit();
         self.aliases.deinit();
+        self.enums.deinit();
         self.enum_consts.deinit();
         self.ns_stack.deinit();
     }
@@ -362,17 +370,21 @@ pub const Parser = struct {
         try self.aliases.append(.{ .name = name, .ty = ty });
     }
 
-    fn parseNamespaceBody(self: *Parser, outer: []const u8) CompileError!void {
+    fn parseNamespaceBody(self: *Parser, outer_prefix: []const u8) CompileError!void {
         var name: []const u8 = "";
         if (self.peek().tag == .ident) name = self.next().text(self.source);
-        const full = if (name.len == 0) try self.gpa.dupe(u8, outer) else if (outer.len == 0) try std.fmt.allocPrint(self.gpa, "{s}_", .{name}) else try std.fmt.allocPrint(self.gpa, "{s}{s}_", .{ outer, name });
         if (self.eat(.eq) != null) {
             while (self.peek().tag != .semi and self.peek().tag != .eof) _ = self.next();
             _ = try self.expect(.semi, "';'");
             return;
         }
         _ = try self.expect(.l_brace, "'{{'");
-        try self.ns_stack.append(full);
+        // Stack holds BARE names; nsPrefix() joins them with '_' separators.
+        const anonymous = name.len == 0;
+        if (!anonymous) {
+            const bare = try std.fmt.allocPrint(self.gpa, "{s}{s}", .{ outer_prefix, name });
+            try self.ns_stack.append(bare);
+        }
         while (self.peek().tag != .r_brace and self.peek().tag != .eof) {
             if (self.peek().tag == .directive) {
                 _ = self.next();
@@ -417,7 +429,7 @@ pub const Parser = struct {
             return self.err(self.peek().start, "expected a namespace member", .{});
         }
         _ = try self.expect(.r_brace, "'}'");
-        _ = self.ns_stack.pop();
+        if (!anonymous) _ = self.ns_stack.pop();
     }
 
     fn parseEnum(self: *Parser, qual: []const u8) CompileError!void {
@@ -425,7 +437,8 @@ pub const Parser = struct {
         _ = self.eatIdent("class");
         _ = self.eatIdent("struct");
         if (self.peek().tag == .ident and self.peekAt(1).tag != .colon_colon) {
-            _ = self.next(); // name (enums are anonymous in SA lowering)
+            const ename = self.next().text(self.source);
+            try self.enums.append(.{ .name = ename, .qual = qual });
         }
         if (self.eat(.colon) != null) {
             _ = try self.parseType();
@@ -605,10 +618,7 @@ pub const Parser = struct {
                 return self.err(mname_tok.start, "member initializers are not supported in v0.1", .{});
             }
             if (self.eat(.eq) != null) {
-                _ = try self.parseExpr(0);
-                _ = try self.expect(.semi, "';'");
-                try fields.append(.{ .ty = mty, .name = mname });
-                continue;
+                return self.err(mname_tok.start, "member initializers are not supported in v0.1 (use a default constructor)", .{});
             }
             if (self.eat(.colon) != null) {
                 return self.err(mname_tok.start, "bit-fields are not supported in v0.1", .{});
@@ -723,6 +733,34 @@ pub const Parser = struct {
                 continue;
             }
             break;
+        }
+        // Bare `long` / `unsigned` / `signed` (etc.) mean `int` when no
+        // explicit base type follows.
+        if ((long_count > 0 or is_unsigned) and self.peek().tag == .ident) {
+            const nw = self.peek().text(self.source);
+            const is_base = std.mem.eql(u8, nw, "void") or std.mem.eql(u8, nw, "bool") or std.mem.eql(u8, nw, "char") or std.mem.eql(u8, nw, "short") or std.mem.eql(u8, nw, "int") or std.mem.eql(u8, nw, "float") or std.mem.eql(u8, nw, "double") or std.mem.eql(u8, nw, "auto") or std.mem.eql(u8, nw, "struct") or std.mem.eql(u8, nw, "class") or std.mem.eql(u8, nw, "enum") or std.mem.eql(u8, nw, "typename");
+            var known = is_base;
+            if (!known) {
+                for (self.structs.items) |st| {
+                    if (std.mem.eql(u8, st.name, nw)) {
+                        known = true;
+                        break;
+                    }
+                }
+            }
+            if (!known) {
+                for (self.aliases.items) |al| {
+                    if (std.mem.eql(u8, al.name, nw)) {
+                        known = true;
+                        break;
+                    }
+                }
+            }
+            if (!known) {
+                var base_ty = CType{ .prim = .i32 };
+                if (long_count > 0) base_ty.prim = .i64;
+                return self.finishType(base_ty);
+            }
         }
         const t = self.peek();
         if (t.tag != .ident) return self.err(t.start, "expected a type", .{});
@@ -925,6 +963,11 @@ pub const Parser = struct {
         const prims = [_][]const u8{ "void", "bool", "char", "short", "int", "long", "float", "double", "auto", "unsigned", "signed", "const", "constexpr", "volatile", "struct", "class", "enum", "typename", "static", "extern", "register", "mutable", "inline", "thread_local" };
         for (prims) |p| {
             if (std.mem.eql(u8, w, p)) return true;
+        }
+        // Statement/expression keywords never start a declaration.
+        const non_types = [_][]const u8{ "new", "delete", "sizeof", "this", "true", "false", "nullptr", "throw", "operator", "alignof", "noexcept", "decltype", "cout", "cerr", "endl", "return", "if", "while", "do", "for", "switch", "break", "continue", "goto", "try", "catch", "typedef", "using", "static_assert", "case", "default", "public", "private", "protected", "template", "virtual", "friend", "explicit", "static_cast", "const_cast", "reinterpret_cast", "dynamic_cast" };
+        for (non_types) |k| {
+            if (std.mem.eql(u8, w, k)) return false;
         }
         for (self.structs.items) |s| {
             if (std.mem.eql(u8, s.name, w)) return true;

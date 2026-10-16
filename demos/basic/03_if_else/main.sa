@@ -1,0 +1,139 @@
+@import "sa_std/io/print.sai"
+@import "sa_std/fmt.sai"
+@import "sa_std/string.sai"
+@const str_0 = utf8:"\n"
+@main() -> i32:
+  score = 85
+  cpp_t_0 = sge score, 90
+  br cpp_t_0 -> L_cpp_then_0, L_cpp_else_2
+L_cpp_then_0:
+  cpp_t_1 = sext 1 as i64
+  cpp_t_2 = alloc 64
+  cpp_t_3 = alloc 8
+  cpp_t_4 = call @sa_fmt_i64_into(cpp_t_1, 10, cpp_t_2, 64, &cpp_t_3)
+  cpp_t_5 = load cpp_t_3 + 0 as u64
+  cpp_t_6 = alloc 16
+  store cpp_t_6 + 0, cpp_t_2 as ptr
+  store cpp_t_6 + 8, cpp_t_5 as u64
+  cpp_t_7 = load cpp_t_6 + 0 as ptr
+  cpp_t_8 = load cpp_t_6 + 8 as u64
+  call @sa_print_bytes(&cpp_t_7, cpp_t_8)
+  cpp_t_9 = alloc 16
+  store cpp_t_9 + 0, &str_0 as ptr
+  store cpp_t_9 + 8, 1 as u64
+  cpp_t_10 = load cpp_t_9 + 0 as ptr
+  cpp_t_11 = load cpp_t_9 + 8 as u64
+  call @sa_print_bytes(&cpp_t_10, cpp_t_11)
+  !cpp_t_9
+  !cpp_t_6
+  !cpp_t_4
+  !cpp_t_3
+  !cpp_t_2
+  jmp L_cpp_endif_1
+L_cpp_else_2:
+  cpp_t_12 = sge score, 60
+  br cpp_t_12 -> L_cpp_then_3, L_cpp_else_5
+L_cpp_then_3:
+  cpp_t_13 = sext 2 as i64
+  cpp_t_14 = alloc 64
+  cpp_t_15 = alloc 8
+  cpp_t_16 = call @sa_fmt_i64_into(cpp_t_13, 10, cpp_t_14, 64, &cpp_t_15)
+  cpp_t_17 = load cpp_t_15 + 0 as u64
+  cpp_t_18 = alloc 16
+  store cpp_t_18 + 0, cpp_t_14 as ptr
+  store cpp_t_18 + 8, cpp_t_17 as u64
+  cpp_t_19 = load cpp_t_18 + 0 as ptr
+  cpp_t_20 = load cpp_t_18 + 8 as u64
+  call @sa_print_bytes(&cpp_t_19, cpp_t_20)
+  cpp_t_21 = alloc 16
+  store cpp_t_21 + 0, &str_0 as ptr
+  store cpp_t_21 + 8, 1 as u64
+  cpp_t_22 = load cpp_t_21 + 0 as ptr
+  cpp_t_23 = load cpp_t_21 + 8 as u64
+  call @sa_print_bytes(&cpp_t_22, cpp_t_23)
+  !cpp_t_21
+  !cpp_t_18
+  !cpp_t_16
+  !cpp_t_15
+  !cpp_t_14
+  jmp L_cpp_endif_4
+L_cpp_else_5:
+  cpp_t_24 = sext 3 as i64
+  cpp_t_25 = alloc 64
+  cpp_t_26 = alloc 8
+  cpp_t_27 = call @sa_fmt_i64_into(cpp_t_24, 10, cpp_t_25, 64, &cpp_t_26)
+  cpp_t_28 = load cpp_t_26 + 0 as u64
+  cpp_t_29 = alloc 16
+  store cpp_t_29 + 0, cpp_t_25 as ptr
+  store cpp_t_29 + 8, cpp_t_28 as u64
+  cpp_t_30 = load cpp_t_29 + 0 as ptr
+  cpp_t_31 = load cpp_t_29 + 8 as u64
+  call @sa_print_bytes(&cpp_t_30, cpp_t_31)
+  cpp_t_32 = alloc 16
+  store cpp_t_32 + 0, &str_0 as ptr
+  store cpp_t_32 + 8, 1 as u64
+  cpp_t_33 = load cpp_t_32 + 0 as ptr
+  cpp_t_34 = load cpp_t_32 + 8 as u64
+  call @sa_print_bytes(&cpp_t_33, cpp_t_34)
+  !cpp_t_32
+  !cpp_t_29
+  !cpp_t_27
+  !cpp_t_26
+  !cpp_t_25
+  jmp L_cpp_endif_4
+L_cpp_endif_4:
+  jmp L_cpp_endif_1
+L_cpp_endif_1:
+  cpp_t_35 = slt score, 60
+  br cpp_t_35 -> L_cpp_then_6, L_cpp_else_8
+L_cpp_then_6:
+  cpp_t_36 = sext 4 as i64
+  cpp_t_37 = alloc 64
+  cpp_t_38 = alloc 8
+  cpp_t_39 = call @sa_fmt_i64_into(cpp_t_36, 10, cpp_t_37, 64, &cpp_t_38)
+  cpp_t_40 = load cpp_t_38 + 0 as u64
+  cpp_t_41 = alloc 16
+  store cpp_t_41 + 0, cpp_t_37 as ptr
+  store cpp_t_41 + 8, cpp_t_40 as u64
+  cpp_t_42 = load cpp_t_41 + 0 as ptr
+  cpp_t_43 = load cpp_t_41 + 8 as u64
+  call @sa_print_bytes(&cpp_t_42, cpp_t_43)
+  cpp_t_44 = alloc 16
+  store cpp_t_44 + 0, &str_0 as ptr
+  store cpp_t_44 + 8, 1 as u64
+  cpp_t_45 = load cpp_t_44 + 0 as ptr
+  cpp_t_46 = load cpp_t_44 + 8 as u64
+  call @sa_print_bytes(&cpp_t_45, cpp_t_46)
+  !cpp_t_44
+  !cpp_t_41
+  !cpp_t_39
+  !cpp_t_38
+  !cpp_t_37
+  jmp L_cpp_endif_7
+L_cpp_else_8:
+  cpp_t_47 = sext 5 as i64
+  cpp_t_48 = alloc 64
+  cpp_t_49 = alloc 8
+  cpp_t_50 = call @sa_fmt_i64_into(cpp_t_47, 10, cpp_t_48, 64, &cpp_t_49)
+  cpp_t_51 = load cpp_t_49 + 0 as u64
+  cpp_t_52 = alloc 16
+  store cpp_t_52 + 0, cpp_t_48 as ptr
+  store cpp_t_52 + 8, cpp_t_51 as u64
+  cpp_t_53 = load cpp_t_52 + 0 as ptr
+  cpp_t_54 = load cpp_t_52 + 8 as u64
+  call @sa_print_bytes(&cpp_t_53, cpp_t_54)
+  cpp_t_55 = alloc 16
+  store cpp_t_55 + 0, &str_0 as ptr
+  store cpp_t_55 + 8, 1 as u64
+  cpp_t_56 = load cpp_t_55 + 0 as ptr
+  cpp_t_57 = load cpp_t_55 + 8 as u64
+  call @sa_print_bytes(&cpp_t_56, cpp_t_57)
+  !cpp_t_55
+  !cpp_t_52
+  !cpp_t_50
+  !cpp_t_49
+  !cpp_t_48
+  jmp L_cpp_endif_7
+L_cpp_endif_7:
+  !score
+  ret 0

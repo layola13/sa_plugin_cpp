@@ -235,8 +235,43 @@ pub const Lexer = struct {
             if (c == '\'') {
                 const start = i;
                 i += 1;
-                if (i < s.len and s[i] == '\\') i += 1;
-                i += 1; // the character itself
+                if (i < s.len and s[i] == '\\') {
+                    // Escape sequence: consume `\` + full escape body
+                    // (C++17: \n \' \" \\ \a \b \f \n \r \t \v \0,
+                    //  \xHH..., \uHHHH, \UNNNNNNNN, octal \OOO).
+                    i += 1; // past backslash
+                    if (i < s.len) {
+                        const e = s[i];
+                        if (e == 'x' or e == 'X') {
+                            i += 1;
+                            // 1+ hex digits (consume all present)
+                            while (i < s.len and isHex(s[i])) : (i += 1) {}
+                        } else if (e == 'u') {
+                            i += 1;
+                            var n: usize = 0;
+                            while (n < 4 and i < s.len and isHex(s[i])) : (n += 1) {
+                                i += 1;
+                            }
+                        } else if (e == 'U') {
+                            i += 1;
+                            var n: usize = 0;
+                            while (n < 8 and i < s.len and isHex(s[i])) : (n += 1) {
+                                i += 1;
+                            }
+                        } else if (e >= '0' and e <= '7') {
+                            // Octal: up to 3 digits total (already at first).
+                            i += 1;
+                            var n: usize = 1;
+                            while (n < 3 and i < s.len and s[i] >= '0' and s[i] <= '7') : (n += 1) {
+                                i += 1;
+                            }
+                        } else {
+                            i += 1; // simple one-char escape
+                        }
+                    }
+                } else {
+                    i += 1; // the character itself
+                }
                 if (i >= s.len or s[i] != '\'') {
                     _ = diag.fail(start, "unterminated character literal", .{});
                     return error.LexError;
@@ -346,6 +381,10 @@ fn isDigit(c: u8) bool {
     return c >= '0' and c <= '9';
 }
 
+fn isHex(c: u8) bool {
+    return isDigit(c) or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F');
+}
+
 fn isAlpha(c: u8) bool {
     return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z');
 }
@@ -414,4 +453,21 @@ test "lexer handles cout shifts and directives" {
     try std.testing.expect(toks[1].tag == .ident); // std
     try std.testing.expect(toks[2].tag == .colon_colon);
     try std.testing.expect(toks[4].tag == .lt_lt);
+}
+
+test "lexer handles C++17 char escapes (hex/unicode/octal)" {
+    const gpa = std.testing.allocator;
+    // Regression: nlohmann/json uses '\x1F' (json.hpp:13211); the old
+    // lexer only skipped 1 char after `\` and reported unterminated.
+    const src = "char a = '\\x1F'; char b = '\\n'; char c = '\\0'; char d = '\\u0041';\n";
+    var lex = Lexer.init(src);
+    var diag = Diag.init(gpa);
+    defer diag.deinit();
+    const toks = try lex.tokenize(gpa, &diag);
+    defer gpa.free(toks);
+    var n_char: usize = 0;
+    for (toks) |t| {
+        if (t.tag == .char_lit) n_char += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 4), n_char);
 }

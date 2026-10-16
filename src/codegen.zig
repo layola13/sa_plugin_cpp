@@ -1656,7 +1656,7 @@ pub const Codegen = struct {
                 return self.err(ex.off, "struct has no field '{s}'", .{f.name});
             },
             .new_ => return .ptr,
-            .delete_ => return .i32,
+            .delete_ => return .i32, // (payload ignored for kinds)
             .sizeof_ty => return .i32,
             .cast => |c| {
                 const rt = try self.resolveType(c.ty, ex.off);
@@ -1966,8 +1966,8 @@ pub const Codegen = struct {
                 try self.emit("{s} = alloc {d}", .{ t, esz });
                 return .{ .txt = t, .kind = .ptr, .owned = true, .is_temp = true };
             },
-            .delete_ => |x| {
-                const v = try self.genExpr(x);
+            .delete_ => |d| {
+                const v = try self.genExpr(d.x);
                 try self.killVal(v);
                 // Named bindings stay owned until scope end (use-after-delete
                 // is not diagnosed in v0.1).

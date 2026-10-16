@@ -7,6 +7,7 @@ pub const CompileError = error{
     ParseError,
     TypeError,
     CodegenError,
+    LeakError,
     IoError,
     OutOfMemory,
 };

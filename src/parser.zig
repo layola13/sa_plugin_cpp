@@ -80,7 +80,7 @@ pub const ExprKind = union(enum) {
     index: struct { base: Eid, idx: Eid },
     field: struct { base: Eid, arrow: bool, name: []const u8 },
     new_: struct { ty: CType, args: []Eid, array_len: ?Eid },
-    delete_: Eid,
+    delete_: struct { x: Eid, is_array: bool },
     sizeof_ty: CType,
     cast: struct { ty: CType, x: Eid },
     cout_chain: []Eid,
@@ -1656,11 +1656,13 @@ pub const Parser = struct {
                 }
                 if (std.mem.eql(u8, word, "delete")) {
                     _ = self.next();
+                    var is_array = false;
                     if (self.eat(.l_bracket) != null) {
                         _ = try self.expect(.r_bracket, "']'");
+                        is_array = true;
                     }
                     const x = try self.parseUnary();
-                    return self.addExpr(.{ .delete_ = x }, t.start);
+                    return self.addExpr(.{ .delete_ = .{ .x = x, .is_array = is_array } }, t.start);
                 }
                 if (std.mem.eql(u8, word, "sizeof")) {
                     return self.parseSizeof();

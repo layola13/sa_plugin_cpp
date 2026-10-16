@@ -26,12 +26,37 @@ export PATH=/tmp/opencode/zig-x86_64-linux-0.17.0:$PATH
 
 ```bash
 zig build            # libcpp.so + cpp CLI + lib/sap.json under zig-out/
-zig build test       # unit tests (lexer/parser/codegen, no output = green)
+zig build test       # unit tests (lexer/parser/codegen/leakcheck, no output = green)
 ./zig-out/bin/cpp build demos/basic/01_hello/main.cpp --out /tmp/hello.sa
 ```
 
 `sci` must be on its `0.17` branch for any SA verification
 (`sa check /tmp/hello.sa`); this repo itself has no sci dependency.
+
+## Demos & acceptance
+
+`demos/basic/01..26` mirror the `sa_plugin_sla` demo conventions
+(`main.cpp` + `expected.stdout` + reviewed `main.sa` + `README.md`).
+`sweep.sh` enforces the whole chain per demo
+(cpp build → committed `main.sa` in sync → `sa check` → run → diff):
+
+```bash
+sh tools/sweep.sh                 # js backend (default)
+BACKEND=exe sh tools/sweep.sh    # native backend (needs LLVM-built sa)
+REGEN=1 sh tools/sweep.sh        # refresh committed main.sa files
+```
+
+Current acceptance: **26/26 pass on both `js` and `exe` backends**,
+plus `zig build test` green (17 tests).
+
+## Compile-time leak check
+
+`cpp check` / `cpp build` run a path-sensitive, alias-aware leak analysis
+(`src/leakcheck.zig`, details in `docs/leakcheck_cn.md`): every `new` must
+be freed on all paths reaching an exit, `new[]`/`delete[]` must pair,
+overwrites/early-returns/loop-carried allocations are diagnosed with C++
+source lines. Out-of-subset code fails with an explicit compile
+error — never silently miscompiled.
 
 ## Usage
 

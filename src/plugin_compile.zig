@@ -3,6 +3,7 @@ const lex = @import("lexer.zig");
 const par = @import("parser.zig");
 const cg = @import("codegen.zig");
 const cpp_rt = @import("cpp_rt.zig");
+const lck = @import("leakcheck.zig");
 
 pub const CompileError = lex.CompileError;
 pub const Diag = lex.Diag;
@@ -30,6 +31,10 @@ pub fn compileSource(gpa: std.mem.Allocator, source: []const u8, out: *std.Io.Wr
     var parser = par.Parser.create(agpa, source, toks, &adiag);
     defer parser.deinit();
     try parser.parseUnit();
+    // Compile-time leak check (no SA is emitted when it fails).
+    var leaks = lck.LeakCheck.init(agpa, &parser, &adiag);
+    defer leaks.deinit();
+    try leaks.checkUnit();
     var abuf: std.Io.Writer.Allocating = .init(gpa);
     defer abuf.deinit();
     var gen = cg.Codegen.init(agpa, &parser, &adiag, &abuf.writer);
@@ -109,6 +114,7 @@ pub fn describeFailure(gpa: std.mem.Allocator, source: []const u8, diag: *const 
         error.LexError => "lex",
         error.ParseError => "parse",
         error.TypeError, error.CodegenError => "lower",
+        error.LeakError => "leak",
         error.IoError => "io",
         error.OutOfMemory => "oom",
     };

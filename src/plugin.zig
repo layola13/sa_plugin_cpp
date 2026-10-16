@@ -75,4 +75,5 @@ test {
     _ = @import("parser.zig");
     _ = @import("codegen.zig");
     _ = @import("plugin_compile.zig");
+    _ = @import("leakcheck.zig");
 }
